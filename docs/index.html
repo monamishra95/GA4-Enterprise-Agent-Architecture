@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GA4 Enterprise Agent Architecture — Command Center</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    body { background: #0a0f1e; color: #e2e8f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; }
+    .inner-card { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; }
+
+    /* Badges */
+    .badge-human     { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+    .badge-suspicious{ background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+    .badge-bot       { background: rgba(239,68,68,0.15);  color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+
+    /* Animations */
+    @keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(.85)} }
+    .pulse { animation: pulse-dot 2s ease-in-out infinite; }
+
+    @keyframes row-in { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+    .row-enter { animation: row-in .35s ease forwards; }
+
+    @keyframes fadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+    .fade-up { animation: fadeUp .6s ease both; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: #0a0f1e; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+
+    /* Toggle */
+    .toggle-btn { transition: background .3s; }
+    .toggle-knob { transition: transform .3s; }
+  </style>
+</head>
+<body class="min-h-screen p-4 sm:p-6 lg:p-8">
+
+  <!-- ═══════════════════════════════════════════════════════
+       HEADER
+  ═══════════════════════════════════════════════════════ -->
+  <header class="mb-8 fade-up">
+    <div class="flex flex-wrap items-start justify-between gap-5">
+
+      <!-- Brand -->
+      <div>
+        <div class="flex items-center gap-3 mb-2">
+          <div class="w-9 h-9 rounded-xl flex items-center justify-center text-white text-xs font-black"
+               style="background: linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);">GA4</div>
+          <h1 class="text-xl font-bold text-white tracking-tight">Enterprise Agent Architecture</h1>
+          <span class="text-[10px] px-2 py-0.5 rounded-full font-bold"
+                style="background:rgba(99,102,241,.15);color:#818cf8;border:1px solid rgba(99,102,241,.3);">
+            MVP v1.0
+          </span>
+        </div>
+        <p class="text-slate-500 text-xs ml-12">
+          Server-Side Edge Detection &nbsp;·&nbsp; BigQuery / Vertex AI &nbsp;·&nbsp;
+          Value-Based Bidding &nbsp;·&nbsp; Meridian MMM
+        </p>
+      </div>
+
+      <!-- Live Edge Detection Card -->
+      <div class="inner-card px-5 py-4 flex items-center gap-4 min-w-[260px]">
+        <div>
+          <p class="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">Cloud Armor · Edge Score</p>
+          <p id="edge-score-val" class="text-3xl font-black text-white mt-1 tabular-nums">—</p>
+        </div>
+        <div class="ml-auto text-right">
+          <p id="edge-label" class="text-xs font-bold uppercase tracking-wide">—</p>
+          <p class="text-[10px] text-slate-600 mt-1">reCAPTCHA Sim</p>
+          <div id="edge-dot" class="w-2 h-2 rounded-full ml-auto mt-2 pulse" style="background:#6366f1;"></div>
+        </div>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════════════════════════════
+       SECTION 1: VERTEX AI DATA CLEANING
+  ═══════════════════════════════════════════════════════ -->
+  <section class="card p-6 mb-6 fade-up" style="animation-delay:.1s">
+
+    <div class="flex flex-wrap items-start justify-between gap-4 mb-6">
+      <div>
+        <h2 class="text-sm font-semibold text-white flex items-center gap-2">
+          <span style="color:#8b5cf6;">⬡</span> Vertex AI Data Cleaning Pipeline
+        </h2>
+        <p class="text-slate-500 text-xs mt-1">
+          Raw GA4 hits scored server-side → ML clustering filters bots before BigQuery export
+        </p>
+      </div>
+
+      <!-- Metric chips -->
+      <div class="flex gap-3 flex-wrap text-center">
+        <div class="inner-card px-4 py-2">
+          <p class="text-[10px] text-slate-500 uppercase tracking-wide">Raw Sessions</p>
+          <p id="m-raw" class="text-lg font-bold text-white">—</p>
+        </div>
+        <div class="inner-card px-4 py-2">
+          <p class="text-[10px] text-slate-500 uppercase tracking-wide">Cleaned</p>
+          <p id="m-cleaned" class="text-lg font-bold" style="color:#34d399">—</p>
+        </div>
+        <div class="inner-card px-4 py-2">
+          <p class="text-[10px] text-slate-500 uppercase tracking-wide">Bots Removed</p>
+          <p id="m-bots" class="text-lg font-bold" style="color:#f87171">—</p>
+        </div>
+      </div>
+    </div>
+
+    <div style="height:220px; position:relative;">
+      <canvas id="cleaningChart"></canvas>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       SECTION 2: VALUE-BASED BIDDING ENGINE
+  ═══════════════════════════════════════════════════════ -->
+  <section class="card p-6 mb-6 fade-up" style="animation-delay:.2s">
+
+    <div class="flex flex-wrap items-start justify-between gap-4 mb-5">
+      <div>
+        <h2 class="text-sm font-semibold text-white flex items-center gap-2">
+          <span style="color:#10b981;">$</span> Value-Based Bidding Engine
+        </h2>
+        <p class="text-slate-500 text-xs mt-1">
+          Algorithmic $0 bidding on detected bots — replacing manual audience exclusions
+        </p>
+      </div>
+
+      <!-- VBB Metrics -->
+      <div class="flex gap-3 flex-wrap text-center">
+        <div class="inner-card px-4 py-2">
+          <p class="text-[10px] text-slate-500 uppercase tracking-wide">Total Clicks</p>
+          <p id="v-total" class="text-lg font-bold text-white">0</p>
+        </div>
+        <div class="inner-card px-4 py-2">
+          <p class="text-[10px] text-slate-500 uppercase tracking-wide">Human</p>
+          <p id="v-human" class="text-lg font-bold" style="color:#34d399">0</p>
+        </div>
+        <div class="inner-card px-4 py-2">
+          <p class="text-[10px] text-slate-500 uppercase tracking-wide">Bot / Fraud</p>
+          <p id="v-bot" class="text-lg font-bold" style="color:#f87171">0</p>
+        </div>
+        <div class="inner-card px-4 py-2">
+          <p class="text-[10px] text-slate-500 uppercase tracking-wide">Ad Spend Saved</p>
+          <p id="v-saved" class="text-lg font-bold" style="color:#34d399">$0</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live click table -->
+    <div class="rounded-xl overflow-hidden" style="border:1px solid #334155;">
+      <table class="w-full text-[11px]">
+        <thead>
+          <tr style="background:#0f172a; border-bottom:1px solid #334155;">
+            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Time</th>
+            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Client ID</th>
+            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Source</th>
+            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Edge Score</th>
+            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Type</th>
+            <th class="px-4 py-3 text-right text-slate-500 font-semibold uppercase tracking-widest">Conv. Value</th>
+          </tr>
+        </thead>
+        <tbody id="vbb-body"></tbody>
+      </table>
+    </div>
+    <p class="text-[10px] text-slate-700 mt-2 text-right">↑ Live feed — new event every 2s</p>
+
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       SECTION 3: MERIDIAN MMM & GeoX CALIBRATION
+  ═══════════════════════════════════════════════════════ -->
+  <section class="card p-6 mb-6 fade-up" style="animation-delay:.3s">
+
+    <div class="flex flex-wrap items-start justify-between gap-4 mb-5">
+      <div>
+        <h2 class="text-sm font-semibold text-white flex items-center gap-2">
+          <span style="color:#f59e0b;">◈</span> Meridian MMM &amp; GeoX Incrementality Calibration
+        </h2>
+        <p class="text-slate-500 text-xs mt-1">
+          Bot traffic inflated Meta Ads lift by ~150% — calibration reveals true channel performance
+        </p>
+      </div>
+
+      <!-- Toggle -->
+      <div class="flex items-center gap-3">
+        <span id="lbl-raw" class="text-xs font-semibold" style="color:#818cf8">Raw</span>
+        <button id="meridian-toggle" onclick="toggleMeridian()"
+          class="toggle-btn relative w-12 h-6 rounded-full focus:outline-none"
+          style="background:#334155;">
+          <span id="toggle-knob"
+            class="toggle-knob absolute left-1 top-1 w-4 h-4 bg-white rounded-full shadow-md"></span>
+        </button>
+        <span id="lbl-cal" class="text-xs font-semibold text-slate-500">Calibrated</span>
+      </div>
+    </div>
+
+    <!-- Insight banner -->
+    <div id="meridian-insight" class="rounded-xl px-4 py-3 mb-5 text-xs leading-relaxed"
+         style="background:rgba(99,102,241,.07); border:1px solid rgba(99,102,241,.2);">
+      <strong style="color:#818cf8;">Raw View:</strong>
+      <span class="text-slate-400">
+        Meta Ads lift is overstated — LLM scrapers and ad fraud bots are triggering
+        conversion pixels, inflating measured ROAS. Toggle to Calibrated to see Meridian's
+        human-only incrementality estimates.
+      </span>
+    </div>
+
+    <div style="height:250px; position:relative;">
+      <canvas id="meridianChart"></canvas>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       GA4 MP EVENT STREAM LOG
+  ═══════════════════════════════════════════════════════ -->
+  <div class="card p-5 fade-up" style="animation-delay:.4s">
+    <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+      <span class="w-1.5 h-1.5 rounded-full pulse" style="background:#10b981;display:inline-block;"></span>
+      GA4 Measurement Protocol — Server-Side Event Stream
+    </p>
+    <div id="console-feed"
+         class="font-mono text-[11px] text-slate-500 flex flex-col gap-1.5"
+         style="max-height:140px; overflow-y:auto;"></div>
+  </div>
+
+  <footer class="mt-8 text-center text-[10px] text-slate-700 pb-4">
+    GA4 Enterprise Agent Architecture &nbsp;·&nbsp; Portfolio Demo &nbsp;·&nbsp;
+    All data simulated &nbsp;·&nbsp; No real credentials or GA4 IDs used
+  </footer>
+
+
+  <!-- ═══════════════════════════════════════════════════════
+       JAVASCRIPT
+  ═══════════════════════════════════════════════════════ -->
+  <script>
+
+    // ─────────────────────────────────────────────────────
+    // UTILITIES
+    // ─────────────────────────────────────────────────────
+
+    const $ = id => document.getElementById(id);
+    const consoleFeed = $('console-feed');
+
+    function logToFeed(msg, color = '#475569') {
+      const el = document.createElement('div');
+      el.style.color = color;
+      el.textContent = `[${new Date().toISOString()}]  ${msg}`;
+      consoleFeed.insertBefore(el, consoleFeed.firstChild);
+      while (consoleFeed.children.length > 40) consoleFeed.removeChild(consoleFeed.lastChild);
+    }
+
+    function randFloat(min, max, dp = 3) {
+      return parseFloat((Math.random() * (max - min) + min).toFixed(dp));
+    }
+
+    function uuid8() {
+      return Math.random().toString(36).substr(2, 8).toUpperCase();
+    }
+
+    // ─────────────────────────────────────────────────────
+    // EDGE DETECTION SIMULATOR
+    // Simulates Cloud Armor / reCAPTCHA Enterprise server-side
+    // risk scoring before the hit reaches GA4.
+    // ─────────────────────────────────────────────────────
+
+    function classifyEdge(score) {
+      if (score >= 0.70) return { label: 'HUMAN',       color: '#34d399', dot: '#10b981' };
+      if (score >= 0.40) return { label: 'SUSPICIOUS',  color: '#fbbf24', dot: '#f59e0b' };
+      return               { label: 'BOT / FRAUD',  color: '#f87171', dot: '#ef4444' };
+    }
+
+    function fireGA4MeasurementProtocol(score, cls) {
+      const payload = {
+        // [PRODUCTION] POST to:
+        //   https://www.google-analytics.com/mp/collect
+        //   ?measurement_id=G-YOUR_ID&api_secret=YOUR_SECRET
+        client_id: crypto.randomUUID(),
+        non_personalized_ads: cls !== 'HUMAN',
+        events: [{
+          name: cls === 'HUMAN' ? 'page_view' : 'bot_traffic_detected',
+          params: {
+            edge_score: score,
+            traffic_classification: cls,
+            detection_source: 'cloud_armor_simulation',
+            // [PRODUCTION] Set via Server-Side GTM custom variable
+            traffic_type: cls === 'HUMAN' ? 'organic' : 'internal',
+            conversion_value: cls === 'HUMAN' ? 150 : 0,
+          }
+        }]
+      };
+      console.log('[GA4 MP Payload]', JSON.stringify(payload, null, 2));
+      return payload;
+    }
+
+    function runEdgeDetection() {
+      const score = randFloat(0, 1);
+      const cls   = classifyEdge(score);
+      const mp    = fireGA4MeasurementProtocol(score, cls.label);
+
+      $('edge-score-val').textContent   = score.toFixed(3);
+      $('edge-label').textContent       = cls.label;
+      $('edge-label').style.color       = cls.color;
+      $('edge-dot').style.background    = cls.dot;
+
+      logToFeed(
+        `EDGE  |  Score: ${score.toFixed(3)}  →  ${cls.label}  |  ` +
+        `MP Event: ${mp.events[0].name}  |  Conv: $${mp.events[0].params.conversion_value}`,
+        cls.color
+      );
+    }
+
+    runEdgeDetection();
+    setInterval(runEdgeDetection, 4000);
+
+
+    // ─────────────────────────────────────────────────────
+    // SECTION 1: VERTEX AI CLEANING CHART
+    // ─────────────────────────────────────────────────────
+
+    const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const rawSessions     = [12440, 14210, 13880, 15620, 16080, 11190, 13540];
+    const cleanedSessions = rawSessions.map(v => Math.round(v * randFloat(0.60, 0.68)));
+
+    const totalRaw     = rawSessions.reduce((a, b) => a + b, 0);
+    const totalCleaned = cleanedSessions.reduce((a, b) => a + b, 0);
+    const botsRemovedPct = (((totalRaw - totalCleaned) / totalRaw) * 100).toFixed(1);
+
+    $('m-raw').textContent     = totalRaw.toLocaleString();
+    $('m-cleaned').textContent = totalCleaned.toLocaleString();
+    $('m-bots').textContent    = botsRemovedPct + '%';
+
+    new Chart($('cleaningChart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: DAYS,
+        datasets: [
+          {
+            label: 'Raw GA4 Traffic',
+            data: rawSessions,
+            borderColor: '#6366f1',
+            backgroundColor: 'rgba(99,102,241,0.09)',
+            fill: true, tension: 0.4,
+            pointRadius: 4, pointBackgroundColor: '#6366f1',
+          },
+          {
+            label: 'Vertex AI Cleaned',
+            data: cleanedSessions,
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16,185,129,0.09)',
+            fill: true, tension: 0.4,
+            pointRadius: 4, pointBackgroundColor: '#10b981',
+          }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: '#94a3b8', font: { size: 11 }, boxWidth: 12 } },
+          tooltip: { backgroundColor: '#1e293b', titleColor: '#e2e8f0', bodyColor: '#94a3b8',
+                     borderColor: '#334155', borderWidth: 1 }
+        },
+        scales: {
+          x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' } },
+          y: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(51,65,85,.5)' } }
+        }
+      }
+    });
+
+
+    // ─────────────────────────────────────────────────────
+    // SECTION 2: VBB LIVE CLICK FEED
+    // ─────────────────────────────────────────────────────
+
+    let vTotal = 0, vHuman = 0, vBot = 0, vSaved = 0;
+    const vbbBody = $('vbb-body');
+
+    const SOURCES = [
+      'google / cpc', 'meta / paid_social', 'direct / (none)',
+      'bing / cpc', 'programmatic / display'
+    ];
+
+    function addClickRow() {
+      const score   = randFloat(0, 1);
+      const cls     = classifyEdge(score);
+      const isHuman = cls.label === 'HUMAN';
+      const convVal = isHuman ? 150 : 0;
+      const source  = SOURCES[Math.floor(Math.random() * SOURCES.length)];
+      const cid     = uuid8();
+      const now     = new Date().toLocaleTimeString();
+
+      vTotal++;
+      if (isHuman) vHuman++;
+      else { vBot++; vSaved += 2.40; }
+
+      $('v-total').textContent = vTotal;
+      $('v-human').textContent = vHuman;
+      $('v-bot').textContent   = vBot;
+      $('v-saved').textContent = '$' + vSaved.toFixed(2);
+
+      const badgeCls = isHuman ? 'badge-human' : (cls.label === 'SUSPICIOUS' ? 'badge-suspicious' : 'badge-bot');
+
+      const row = document.createElement('tr');
+      row.className = 'row-enter';
+      row.style.borderBottom = '1px solid #1e293b';
+      row.innerHTML = `
+        <td class="px-4 py-2.5 text-slate-500">${now}</td>
+        <td class="px-4 py-2.5 font-mono text-slate-300 text-[11px]">${cid}</td>
+        <td class="px-4 py-2.5 text-slate-400">${source}</td>
+        <td class="px-4 py-2.5">
+          <span style="color:${cls.color}; font-variant-numeric: tabular-nums;">${score.toFixed(3)}</span>
+        </td>
+        <td class="px-4 py-2.5">
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${badgeCls}">${cls.label}</span>
+        </td>
+        <td class="px-4 py-2.5 text-right font-semibold tabular-nums ${isHuman ? 'text-emerald-400' : 'text-red-400'}">
+          $${convVal.toFixed(2)}
+        </td>
+      `;
+
+      vbbBody.insertBefore(row, vbbBody.firstChild);
+      if (vbbBody.children.length > 9) vbbBody.removeChild(vbbBody.lastChild);
+
+      logToFeed(
+        `VBB   |  ${cid}  |  ${source.padEnd(22)}  |  ` +
+        `Score: ${score.toFixed(3)}  |  ${cls.label.padEnd(12)}  |  Conv: $${convVal.toFixed(2)}`,
+        isHuman ? '#34d399' : '#f87171'
+      );
+    }
+
+    for (let i = 0; i < 6; i++) addClickRow();
+    setInterval(addClickRow, 2000);
+
+
+    // ─────────────────────────────────────────────────────
+    // SECTION 3: MERIDIAN MMM TOGGLE CHART
+    // ─────────────────────────────────────────────────────
+
+    const CHANNELS = ['Meta Ads', 'Google Ads', 'TikTok Ads', 'YouTube'];
+    const RAW_LIFT  = [45, 38, 28, 33];   // Bot-inflated
+    const CAL_LIFT  = [17, 36, 11, 30];   // Meridian human-only
+    const BAR_COLORS = [
+      { bg: 'rgba(99,102,241,.75)', bd: '#6366f1' },
+      { bg: 'rgba(16,185,129,.75)', bd: '#10b981' },
+      { bg: 'rgba(245,158,11,.75)', bd: '#f59e0b' },
+      { bg: 'rgba(59,130,246,.75)', bd: '#3b82f6' },
+    ];
+
+    let isCalibrated = false;
+
+    const meridianChart = new Chart($('meridianChart').getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: CHANNELS,
+        datasets: [{
+          label: 'Incrementality Lift %',
+          data: [...RAW_LIFT],
+          backgroundColor: BAR_COLORS.map(c => c.bg),
+          borderColor:     BAR_COLORS.map(c => c.bd),
+          borderWidth: 2, borderRadius: 7,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#1e293b', titleColor: '#e2e8f0',
+            bodyColor: '#94a3b8', borderColor: '#334155', borderWidth: 1,
+            callbacks: { label: ctx => `  Lift: ${ctx.raw}%` }
+          }
+        },
+        scales: {
+          x: { ticks: { color: '#64748b', font: { size: 12 } }, grid: { display: false } },
+          y: {
+            min: 0, max: 55,
+            ticks: { color: '#64748b', font: { size: 10 }, callback: v => v + '%' },
+            grid: { color: 'rgba(51,65,85,.4)' }
+          }
+        },
+        animation: { duration: 800, easing: 'easeInOutQuart' }
+      }
+    });
+
+    function toggleMeridian() {
+      isCalibrated = !isCalibrated;
+      const knob    = $('toggle-knob');
+      const btn     = $('meridian-toggle');
+      const lblRaw  = $('lbl-raw');
+      const lblCal  = $('lbl-cal');
+      const insight = $('meridian-insight');
+
+      if (isCalibrated) {
+        knob.style.transform = 'translateX(24px)';
+        btn.style.background  = '#6366f1';
+        lblRaw.style.color    = '#475569';
+        lblCal.style.color    = '#818cf8';
+        meridianChart.data.datasets[0].data = [...CAL_LIFT];
+        insight.innerHTML = `
+          <strong style="color:#34d399;">Calibrated View (Meridian):</strong>
+          <span class="text-slate-400">
+            After removing bot-inflated conversions, Meta Ads lift drops 62% (45% → 17%).
+            Google Ads holds steady at 36%, confirming true incrementality.
+            <strong style="color:#fbbf24;">Recommendation: reallocate ~30% of Meta budget to Google Ads.</strong>
+          </span>`;
+        logToFeed('MERIDIAN  →  Switched to CALIBRATED view  |  Meta lift: 45% → 17%  |  Google: 38% → 36%', '#f59e0b');
+      } else {
+        knob.style.transform = 'translateX(0px)';
+        btn.style.background  = '#334155';
+        lblRaw.style.color    = '#818cf8';
+        lblCal.style.color    = '#475569';
+        meridianChart.data.datasets[0].data = [...RAW_LIFT];
+        insight.innerHTML = `
+          <strong style="color:#818cf8;">Raw View:</strong>
+          <span class="text-slate-400">
+            Meta Ads lift is overstated — LLM scrapers and ad fraud bots are triggering
+            conversion pixels, inflating measured ROAS. Toggle to Calibrated to see Meridian's
+            human-only incrementality estimates.
+          </span>`;
+        logToFeed('MERIDIAN  →  Switched to RAW view  |  Bot-inflated signals active', '#94a3b8');
+      }
+      meridianChart.update();
+    }
+
+  </script>
+</body>
+</html>
