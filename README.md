@@ -1,6 +1,6 @@
-# GA4 Enterprise Agent Architecture - Measuring how agents & bots engage with your business
+# GA4 Enterprise Agent Architecture — Measuring How Agents & Bots Engage With Your Business
 
-** Product Architecture Brief**
+**Product Architecture Brief**
 
 > Simulating a server-side GA4 data pipeline for AI agent detection, BigQuery/Vertex AI signal cleaning, Value-Based Bidding integration, and Meridian MMM incrementality calibration.
 
@@ -8,7 +8,7 @@
 
 ## The Problem This Solves
 
-LLM scrapers, ad fraud bots, and AI agents now account for a significant share of measured web traffic. They trigger GA4 tags, inflate conversion counts, and corrupt the signals that bidding algorithms rely on. The result: Google Ads Smart Bidding model could be learning from noise, the advertiser's Meridian MMM is attributing lift to bots, and advertiser CPA reports could be made more accurate & complete.
+LLM scrapers, ad fraud bots, and AI agents now account for a significant share of measured web traffic. They trigger GA4 tags, inflate conversion counts, and corrupt the signals that bidding algorithms rely on. The result: Google Ads Smart Bidding may be learning from noise, the advertiser's Meridian MMM attributes lift to bots, and CPA reports reflect a distorted signal.
 
 This architecture demonstrates how enterprise teams can fix this at the infrastructure layer, not the reporting layer.
 
@@ -54,29 +54,29 @@ User / Bot / LLM Agent
 
 ---
 
-## The V2 Strategy: Gaps in Client-side detection
+## The V2 Strategy: Gaps in Client-Side Detection
 
-### The Old Approach and its Deficiencies
+### The Old Approach and Its Deficiencies
 
 Traditional bot detection relied on client-side JavaScript: loading a detection library in the browser, checking mouse movement, fingerprinting the device, and flagging suspicious sessions after the fact. This approach has three deficiencies:
 
-**Core Web Vitals penalty.** Every third-party JS tag adds render-blocking weight to your page. Detection libraries routinely add 80–200ms to Time to Interactive — which leads to a direct hit to an advertiser's Google Search ranking and Quality Score.
+**Core Web Vitals penalty.** Every third-party JS tag adds render-blocking weight to the page. Detection libraries routinely add 80–200ms to Time to Interactive — a direct hit to an advertiser's Google Search ranking and Quality Score.
 
-**Ad blocker bypass rate exceeds 40%.** The broswer can block any detection that runs in it. uBlock Origin, Privacy Badger, and enterprise network proxies strip client-side detection tags before they execute. 
+**Ad blocker bypass rate exceeds 40%.** Any detection that runs in the browser can be blocked by the browser. uBlock Origin, Privacy Badger, and enterprise network proxies strip client-side detection tags before they execute.
 
-**LLM agents don't run JavaScript.** GPTBot, ClaudeBot, and most production AI scrapers use `domcontentloaded`-only page fetches. They never execute GA4 gtag.js, so they never appear in your client-side analytics at all. This means they are absent in the data. That's worse than seeing them as bots. You can't exclude what you can't measure.
+**LLM agents don't run JavaScript.** GPTBot, ClaudeBot, and most production AI scrapers use `domcontentloaded`-only page fetches. They never execute GA4 gtag.js, so they never appear in client-side analytics at all — absent from the data entirely. That is worse than appearing as bots: organizations cannot exclude what they cannot measure.
 
 ### The V2 Approach: Server-Side Edge Detection
 
-The correct architecture moves detection upstream, to the network edge, before the request ever reaches your application:
+The correct architecture moves detection upstream, to the network edge, before the request reaches the application:
 
 **Cloud Armor** evaluates each request against behavioral signatures (IP reputation, request cadence, header anomalies) and attaches a risk score to the request header.
 
-**reCAPTCHA Enterprise** provides a 0.0–1.0 token score that can be validated server-side on every page load — no client JS required for the scoring itself.
+**reCAPTCHA Enterprise** provides a 0.0–1.0 token score validated server-side on every page load — no client JS required for the scoring itself.
 
 **Server-Side GTM** reads this score as a custom variable and fires GA4 Measurement Protocol events server-to-server. The GA4 hit is sent with `traffic_type: internal` for bots (filtered in GA4 UI) and `conversion_value: 0` for the VBB signal.
 
-The result: 100% hit coverage regardless of ad blockers, zero Core Web Vitals impact, and detection signals that LLM agents cannot evade because the scoring happens before the TCP connection is established.
+The result: 100% hit coverage regardless of ad blockers, zero Core Web Vitals impact, and detection signals that LLM agents cannot evade because scoring happens before the TCP connection is established.
 
 ---
 
@@ -84,13 +84,13 @@ The result: 100% hit coverage regardless of ad blockers, zero Core Web Vitals im
 
 ### Why GA4's Raw BigQuery Export Is a Strategic Asset
 
-Most analytics teams currently use GA4 as a reporting tool. The V2 architecture treats it as a data warehouse input. GA4's BigQuery export gives an advertiser the hit-level, unsampled, real-time event data — every page_view, scroll_depth, session_start, and conversion, with all event parameters intact. This raw stream is the foundation of your ML moat:
+Most analytics teams use GA4 as a reporting tool. The V2 architecture treats it as a data warehouse input. GA4's BigQuery export provides hit-level, unsampled, real-time event data — every page_view, scroll_depth, session_start, and conversion, with all event parameters intact. This raw stream is the foundation of a durable ML moat:
 
-**Feature engineering that GA4 UI never exposes.** Session-level features like `event_velocity_per_sec`, `time_between_events`, and `scroll_depth_vs_session_duration` are trivially computed in BigQuery SQL but invisible in the GA4 interface. These features are your strongest bot detection signals.
+**Feature engineering that GA4 UI never exposes.** Session-level features like `event_velocity_per_sec`, `time_between_events`, and `scroll_depth_vs_session_duration` are trivially computed in BigQuery SQL but invisible in the GA4 interface. These are the strongest bot detection signals available.
 
-**Your own labeled training data.** After running this pipeline for 30 days, you have a labeled dataset of Human / LLM_Scraper / Ad_Fraud events tied to real business outcomes. No vendor can replicate this. It is specific to your traffic patterns, your customer profiles, and your conversion funnel.
+**Proprietary labeled training data.** After running this pipeline for 30 days, an organization has a labeled dataset of Human / LLM_Scraper / Ad_Fraud events tied to real business outcomes. No vendor can replicate this — it is specific to the organization's traffic patterns, customer profiles, and conversion funnel.
 
-**Vertex AI Pipelines for retraining.** Schedule a weekly pipeline that pulls the latest BigQuery export, retrains the clustering model on fresh data, and redeploys the endpoint — fully automated. Your detection model improves as the bot landscape evolves.
+**Vertex AI Pipelines for retraining.** A weekly pipeline can pull the latest BigQuery export, retrain the clustering model on fresh data, and redeploy the endpoint — fully automated. The detection model improves as the bot landscape evolves.
 
 ### The Clustering Model
 
@@ -103,7 +103,7 @@ The simulation uses an interpretable rule hierarchy that mirrors what a producti
 | Session Duration | 45 – 600s | 0 – 6s | 0 – 3s |
 | Mouse Move Events | 20 – 250 | 0 | 0 |
 
-In production, replace the rule-based `classify_row()` function in `bq_vertex_pipeline.py` with a call to your Vertex AI endpoint. The labeled output of this simulation serves as your initial training set.
+In production, replace the rule-based `classify_row()` function in `bq_vertex_pipeline.py` with a call to a Vertex AI endpoint. The labeled output of this simulation serves as the initial training set.
 
 ---
 
@@ -111,33 +111,32 @@ In production, replace the rule-based `classify_row()` function in `bq_vertex_pi
 
 ### The Strategic Shift: From Manual Exclusions to Algorithmic $0 Bidding
 
-The conventional approach to bot traffic in paid search is audience exclusion: identify bot IPs, create exclusion lists, upload them to Google Ads, and hope the lists stay current. This is manual, reactive, and fundamentally incomplete — by the time you've identified a bot IP range, it has rotated.
+The conventional approach to bot traffic in paid search is audience exclusion: identify bot IPs, create exclusion lists, upload them to Google Ads, and wait for the lists to take effect. This is manual, reactive, and fundamentally incomplete — by the time a bot IP range is identified, it has rotated.
 
 The V2 approach is different: **let the bots click, but assign them $0 conversion value.**
 
-Google Ads Smart Bidding optimizes toward conversion value, not conversion volume. When a bot click results in a `conversion_value = $0` upload, the algorithm learns that traffic pattern is worthless and reduces its bid for similar future traffic — automatically, continuously, without any exclusion list management.
+Google Ads Smart Bidding optimizes toward conversion value, not conversion volume. When a bot click results in a `conversion_value = $0` upload, the algorithm learns that traffic pattern is worthless and reduces bids for similar future traffic — automatically, continuously, without any exclusion list management.
 
 **The mechanism:**
 
-1. Vertex AI classifies the GA4 hit as Human / Bot.
-2. For human hits: upload an Enhanced Conversion with `conversion_value = $150` (or your actual LTV).
+1. Vertex AI classifies the GA4 hit as Human or Bot.
+2. For human hits: upload an Enhanced Conversion with `conversion_value = $150` (or the advertiser's actual LTV).
 3. For bot hits: upload the same Enhanced Conversion event with `conversion_value = $0.00`.
 4. Smart Bidding ingests both signals and adjusts Target ROAS bids accordingly.
 
-**The compounding benefit:** as your model improves accuracy over time, the bidding signal gets cleaner. Your CPA falls not because you're excluding traffic, but because the algorithm is learning the true value of each traffic source at a granularity no human-managed exclusion list could match.
+**The compounding benefit:** as the model improves accuracy over time, the bidding signal gets cleaner. CPA falls not through exclusion, but because the algorithm learns the true value of each traffic source at a granularity no manually managed exclusion list could match.
 
 ---
 
 ## Meridian MMM & Incrementality Calibration
 
-
-Media Mix Modeling (MMM) measures the incremental lift each channel contributes to business outcomes. The problem: if bots are triggering your GA4 conversion tags, they inflate the measured lift for every channel they interact with.
+Media Mix Modeling (MMM) measures the incremental lift each channel contributes to business outcomes. When bots trigger GA4 conversion tags, they inflate the measured lift for every channel they interact with.
 
 In the simulation, Meta Ads raw lift reads at **45%** — a compelling number. After Meridian calibration (removing bot-inflated conversion signals), it drops to **17%**. Google Ads holds steady at **36%** because its traffic profile contains proportionally fewer bot interactions.
 
-The implication for budget allocation is significant: the raw data suggests Meta Ads is your highest-performing channel. The calibrated data suggests the opposite.
+The budget allocation implication is significant: raw data suggests Meta Ads is the highest-performing channel. Calibrated data suggests the opposite.
 
-**Meridian receives the cleaned BigQuery export** — human-only sessions with verified conversion values — rather than the raw GA4 stream. This ensures the MMM model is estimating true human response to advertising, not a mix of human behavior and automated crawling.
+**Meridian receives the cleaned BigQuery export** — human-only sessions with verified conversion values — rather than the raw GA4 stream. This ensures the MMM model estimates true human response to advertising, not a mixture of human behavior and automated crawling.
 
 ---
 
@@ -149,20 +148,20 @@ GA4-Enterprise-Agent-Architecture/
 │   └── index.html              # Command Center dashboard (zero-build, open directly)
 ├── scripts/
 │   ├── traffic_generator.py    # Playwright traffic simulator (human + bot)
-│   └── bq_vertex_pipeline.py   # BigQuery / Vertex AI pipeline simulator
+│   └── bq_vertex_pipeline.py   # BigQuery / Vertex AI pipeline (real data + mock mode)
 ├── data/                       # Auto-created by bq_vertex_pipeline.py
-│   ├── raw_ga4_events.csv      # 1,000 synthetic GA4 hits
+│   ├── raw_ga4_events.csv      # Session-level GA4 rows (real or synthetic)
 │   └── cleaned_ga4_events.csv  # Human-only payload for VBB / Meridian
 └── README.md
 ```
 
 ---
 
-## How to Run the Simulation
+## How to Run
 
-### 1. Command Center Dashboard (No build required)
+### 1. Command Center Dashboard (no build required)
 
-Simply open `docs/index.html` in any modern browser:
+Open `docs/index.html` in any modern browser, or visit the live GitHub Pages deployment:
 
 ```bash
 # macOS / Linux
@@ -173,9 +172,9 @@ start docs/index.html
 ```
 
 The dashboard will:
-- Auto-run the Edge Detection Simulator on load (check the browser console for raw GA4 MP payloads)
+- Auto-run the Edge Detection Simulator on load (browser console shows raw GA4 MP payloads)
 - Stream live VBB click events every 2 seconds
-- Show the Vertex AI cleaning chart with this week's mock traffic data
+- Show the Vertex AI cleaning chart with mock traffic data
 - Allow toggling between Raw and Calibrated Meridian views
 
 ### 2. BigQuery / Vertex AI Pipeline
@@ -192,7 +191,7 @@ pip install pandas numpy google-cloud-bigquery db-dtypes
 
 # One-time GCP setup (BigQuery mode only)
 # 1. Create a free GCP project at https://console.cloud.google.com
-# 2. Set your project ID at the top of bq_vertex_pipeline.py, or:
+# 2. Set the project ID at the top of bq_vertex_pipeline.py, or:
 export GCP_PROJECT_ID=your-gcp-project-id
 # 3. Authenticate
 gcloud auth application-default login
@@ -231,13 +230,13 @@ A Chromium window will open and run 50 sessions visibly — alternating between 
 | Component | This Repo | Production Replacement |
 |---|---|---|
 | Edge Scoring | `Math.random()` in JS dashboard | Cloud Armor + reCAPTCHA Enterprise API |
-| GA4 Data Source | **Real** — `bigquery-public-data.ga4_obfuscated_sample_ecommerce` (or `--mock` for synthetic) | Your GA4 BigQuery export (`events_*`) |
+| GA4 Data Source | **Real** — `bigquery-public-data.ga4_obfuscated_sample_ecommerce` (or `--mock` for synthetic) | Advertiser's GA4 BigQuery export (`events_*`) |
 | ML Classification | Rule-based Python (mirrors Isolation Forest logic) | Vertex AI endpoint (`endpoint.predict()`) |
 | Conversion Upload | Console log | Google Ads Enhanced Conversions API |
 | MMM Input | Cleaned CSV (human-only sessions) | Meridian via Vertex AI Pipelines |
 | Scheduler | Manual script run | Cloud Scheduler + Cloud Run |
 
-No real GCP credentials, GA4 Measurement IDs, or API keys are used anywhere in this repository. All placeholders follow the `YOUR_GCP_PROJECT_ID` convention.
+No real GCP credentials, GA4 Measurement IDs, or API keys are used in this repository. All placeholders follow the `YOUR_GCP_PROJECT_ID` convention.
 
 ---
 
@@ -245,6 +244,6 @@ No real GCP credentials, GA4 Measurement IDs, or API keys are used anywhere in t
 
 - **Google Analytics 4** — Measurement Protocol, BigQuery export schema, Enhanced Conversions
 - **Google Cloud Platform** — Cloud Armor, reCAPTCHA Enterprise, Vertex AI, BigQuery, Server-Side GTM
-- **Python** — pandas, numpy, scikit-learn, Playwright async automation
+- **Python** — pandas, numpy, google-cloud-bigquery, Playwright async automation
 - **Marketing Science** — Media Mix Modeling (Meridian), Value-Based Bidding, incrementality testing
 - **Frontend** — Zero-dependency dark-mode dashboard (HTML + Tailwind CDN + Chart.js)

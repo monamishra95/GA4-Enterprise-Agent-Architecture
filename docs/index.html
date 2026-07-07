@@ -62,14 +62,22 @@
       </div>
 
       <!-- Live Edge Detection Card -->
-      <div class="inner-card px-5 py-4 flex items-center gap-4 min-w-[260px]">
+      <div class="inner-card px-5 py-4 flex items-center gap-4 min-w-[300px]">
         <div>
           <p class="text-[10px] text-slate-500 uppercase tracking-widest font-semibold">Cloud Armor · Edge Score</p>
           <p id="edge-score-val" class="text-3xl font-black text-white mt-1 tabular-nums">—</p>
+          <p class="text-[10px] mt-1" style="color:#475569;">
+            <code style="color:#818cf8;">Math.random()</code>
+            &nbsp;·&nbsp; refreshes every 4s
+          </p>
         </div>
         <div class="ml-auto text-right">
           <p id="edge-label" class="text-xs font-bold uppercase tracking-wide">—</p>
-          <p class="text-[10px] text-slate-600 mt-1">reCAPTCHA Sim</p>
+          <div class="text-[9px] text-slate-600 mt-2 leading-relaxed text-right">
+            <span style="color:#34d399;">≥ 0.70</span> Human<br>
+            <span style="color:#fbbf24;">0.40–0.69</span> Suspicious<br>
+            <span style="color:#f87171;">&lt; 0.40</span> Bot
+          </div>
           <div id="edge-dot" class="w-2 h-2 rounded-full ml-auto mt-2 pulse" style="background:#6366f1;"></div>
         </div>
       </div>
@@ -169,18 +177,22 @@
         <div class="inner-card px-4 py-2">
           <p class="text-[10px] text-slate-500 uppercase tracking-wide">Total Clicks</p>
           <p id="v-total" class="text-lg font-bold text-white">0</p>
+          <p class="text-[9px] text-slate-700 mt-0.5">count++ per event</p>
         </div>
         <div class="inner-card px-4 py-2">
           <p class="text-[10px] text-slate-500 uppercase tracking-wide">Human</p>
           <p id="v-human" class="text-lg font-bold" style="color:#34d399">0</p>
+          <p class="text-[9px] text-slate-700 mt-0.5">score ≥ 0.70</p>
         </div>
         <div class="inner-card px-4 py-2">
           <p class="text-[10px] text-slate-500 uppercase tracking-wide">Bot / Fraud</p>
           <p id="v-bot" class="text-lg font-bold" style="color:#f87171">0</p>
+          <p class="text-[9px] text-slate-700 mt-0.5">score &lt; 0.70</p>
         </div>
         <div class="inner-card px-4 py-2">
           <p class="text-[10px] text-slate-500 uppercase tracking-wide">Ad Spend Saved</p>
           <p id="v-saved" class="text-lg font-bold" style="color:#34d399">$0</p>
+          <p class="text-[9px] text-slate-700 mt-0.5">bot_n × $2.40 CPC</p>
         </div>
       </div>
     </div>
@@ -348,10 +360,21 @@
        GA4 MP EVENT STREAM LOG
   ═══════════════════════════════════════════════════════ -->
   <div class="card p-5 fade-up" style="animation-delay:.4s">
-    <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-      <span class="w-1.5 h-1.5 rounded-full pulse" style="background:#10b981;display:inline-block;"></span>
-      GA4 Measurement Protocol — Server-Side Event Stream
-    </p>
+    <div class="flex flex-wrap items-start justify-between gap-4 mb-3">
+      <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+        <span class="w-1.5 h-1.5 rounded-full pulse" style="background:#10b981;display:inline-block;"></span>
+        GA4 Measurement Protocol — Server-Side Event Stream
+      </p>
+      <!-- Field legend -->
+      <div class="flex flex-wrap gap-x-4 gap-y-1 text-[9px] text-slate-600">
+        <span><code class="text-slate-500">EDGE</code> = header edge detection cycle (every 4s)</span>
+        <span><code class="text-slate-500">VBB</code> = simulated paid click (every 2s)</span>
+        <span><code class="text-slate-500">MERIDIAN</code> = toggle event</span>
+        <span><code class="text-slate-500">Score</code> = Math.random() 0.0–1.0</span>
+        <span><code class="text-slate-500">Conv</code> = score ≥ 0.70 ? $150 : $0</span>
+        <span style="color:#475569;">All payloads simulated — no GA4 MP endpoint called</span>
+      </div>
+    </div>
     <div id="console-feed"
          class="font-mono text-[11px] text-slate-500 flex flex-col gap-1.5"
          style="max-height:140px; overflow-y:auto;"></div>
