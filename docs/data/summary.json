@@ -1,0 +1,30 @@
+{
+  "generated_at": "2026-07-07T16:52:35.717832",
+  "pipeline_mode": "mock",
+  "data_source": "Synthetic mock data -- run: python scripts/bq_vertex_pipeline.py to refresh",
+  "sessions": {
+    "total_raw": 1000,
+    "total_cleaned": 543,
+    "bots_removed": 457,
+    "bots_removed_pct": 45.7,
+    "human_pct": 54.3
+  },
+  "daily": {
+    "labels": [
+      "Mon 06 Jan"
+    ],
+    "raw": [
+      1000
+    ],
+    "cleaned": [
+      543
+    ]
+  },
+  "vbb": {
+    "human_sessions": 543,
+    "bot_sessions": 457,
+    "total_conv_value": 67820.0,
+    "avg_conv_value": 124.9,
+    "estimated_spend_saved": 1096.8
+  }
+}
