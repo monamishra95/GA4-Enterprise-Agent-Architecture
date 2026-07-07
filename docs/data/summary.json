@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-07T17:25:08.280928",
+  "generated_at": "2026-07-07T17:44:43.881177",
   "pipeline_mode": "mock",
   "data_source": "Synthetic mock data -- run: python scripts/bq_vertex_pipeline.py to refresh",
   "sessions": {
@@ -11,13 +11,31 @@
   },
   "daily": {
     "labels": [
-      "Mon 06 Jan"
+      "Tue 07 Jan",
+      "Wed 08 Jan",
+      "Thu 09 Jan",
+      "Fri 10 Jan",
+      "Sat 11 Jan",
+      "Sun 12 Jan",
+      "Mon 13 Jan"
     ],
     "raw": [
-      1000
+      136,
+      146,
+      135,
+      148,
+      136,
+      147,
+      62
     ],
     "cleaned": [
-      543
+      75,
+      76,
+      63,
+      84,
+      78,
+      82,
+      33
     ]
   },
   "vbb": {

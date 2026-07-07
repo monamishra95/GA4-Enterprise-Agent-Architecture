@@ -136,6 +136,8 @@ def generate_mock_ga4_data(n=N_SESSIONS):
     devices   = ["desktop","mobile","tablet"]
     rows    = []
     elapsed = 0
+    # Spread sessions across 7 days -- avg gap ~10 min so daily chart has 7 data points
+    gap_mean = (7 * 24 * 3600) / n
     for t_type in traffic_types:
         is_human   = (t_type == "Human")
         is_scraper = (t_type == "LLM_Scraper")
@@ -153,7 +155,7 @@ def generate_mock_ga4_data(n=N_SESSIONS):
             random.randint(1,2)
         )
         velocity = round(total_events / max(session_duration,1), 2)
-        elapsed += random.uniform(0.3, 6.0)
+        elapsed += random.expovariate(1.0 / gap_mean)
         rows.append({
             "client_id"             : "".join(random.choices(string.ascii_uppercase+string.digits, k=12)),
             "event_timestamp"       : (base_time + timedelta(seconds=elapsed)).isoformat(),
