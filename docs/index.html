@@ -78,6 +78,21 @@
   </header>
 
   <!-- ═══════════════════════════════════════════════════════
+       DATA SOURCE BANNER
+  ═══════════════════════════════════════════════════════ -->
+  <div class="mb-6 rounded-xl px-5 py-3 flex flex-wrap items-center gap-3 fade-up"
+       style="background:rgba(245,158,11,.07); border:1px solid rgba(245,158,11,.25); animation-delay:.05s">
+    <span class="text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded"
+          style="background:rgba(245,158,11,.2); color:#fbbf24; letter-spacing:.12em;">⚠ SIMULATED DATA</span>
+    <span class="text-[11px] text-slate-400">
+      No GA4 API, BigQuery, Vertex AI, or Meridian connection exists in this demo.
+      All metrics are generated client-side via <code class="text-amber-300">Math.random()</code> and hardcoded constants
+      to illustrate how a production pipeline would behave.
+      See the <strong class="text-slate-300">Formula Legend</strong> in each section for exact calculations.
+    </span>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
        SECTION 1: VERTEX AI DATA CLEANING
   ═══════════════════════════════════════════════════════ -->
   <section class="card p-6 mb-6 fade-up" style="animation-delay:.1s">
@@ -111,6 +126,26 @@
 
     <div style="height:220px; position:relative;">
       <canvas id="cleaningChart"></canvas>
+    </div>
+
+    <!-- Formula Legend: Section 1 -->
+    <div class="mt-4 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-3 gap-3"
+         style="background:#0f172a; border:1px solid #1e293b;">
+      <div>
+        <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#6366f1;">Raw Sessions</p>
+        <code class="text-[11px] text-slate-400">rawSessions[day]</code>
+        <p class="text-[10px] text-slate-600 mt-1">Hardcoded mock values — not pulled from GA4 API.<br>Production: BigQuery <code class="text-slate-500">events_*</code> table.</p>
+      </div>
+      <div>
+        <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#10b981;">Cleaned Sessions</p>
+        <code class="text-[11px] text-slate-400">raw × rand(0.60, 0.68)</code>
+        <p class="text-[10px] text-slate-600 mt-1">Simulates Vertex AI removing 32–40% of traffic as bots.<br>Production: <code class="text-slate-500">endpoint.predict()</code> classification.</p>
+      </div>
+      <div>
+        <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#f87171;">Bots Removed %</p>
+        <code class="text-[11px] text-slate-400">(raw − cleaned) / raw × 100</code>
+        <p class="text-[10px] text-slate-600 mt-1">Computed from totals across the 7-day window.</p>
+      </div>
     </div>
   </section>
 
@@ -166,8 +201,31 @@
         <tbody id="vbb-body"></tbody>
       </table>
     </div>
-    <p class="text-[10px] text-slate-700 mt-2 text-right">↑ Live feed — new event every 2s</p>
+    <p class="text-[10px] text-slate-700 mt-2 text-right">↑ Live feed — new event every 2s · all values simulated client-side</p>
 
+    <!-- Formula Legend: Section 2 -->
+    <div class="mt-4 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-4 gap-3"
+         style="background:#0f172a; border:1px solid #1e293b;">
+      <div>
+        <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#10b981;">Edge Score</p>
+        <code class="text-[11px] text-slate-400">Math.random() → 0.0–1.0</code>
+        <p class="text-[10px] text-slate-600 mt-1">Simulates Cloud Armor + reCAPTCHA Enterprise.<br>Production: real token score from API.</p>
+      </div>
+      <div>
+        <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#818cf8;">Classification</p>
+        <code class="text-[11px] text-slate-400">≥ 0.70 → HUMAN<br>0.40–0.69 → SUSPICIOUS<br>&lt; 0.40 → BOT</code>
+      </div>
+      <div>
+        <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#34d399;">Conv. Value</p>
+        <code class="text-[11px] text-slate-400">HUMAN → $150.00<br>else → $0.00</code>
+        <p class="text-[10px] text-slate-600 mt-1">$0 for bots = Smart Bidding deprioritises that traffic automatically.</p>
+      </div>
+      <div>
+        <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#fbbf24;">Ad Spend Saved</p>
+        <code class="text-[11px] text-slate-400">bot_clicks × $2.40</code>
+        <p class="text-[10px] text-slate-600 mt-1">$2.40 = simulated avg CPC.<br>Production: pulled from Google Ads API.</p>
+      </div>
+    </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════
@@ -211,6 +269,78 @@
 
     <div style="height:250px; position:relative;">
       <canvas id="meridianChart"></canvas>
+    </div>
+
+    <!-- Formula Legend: Section 3 -->
+    <div class="mt-4 rounded-xl p-4" style="background:#0f172a; border:1px solid #1e293b;">
+      <p class="text-[10px] font-bold uppercase tracking-widest mb-3" style="color:#f59e0b;">
+        Meridian Calibration — How the numbers are calculated
+      </p>
+
+      <!-- Formula row -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+        <div>
+          <p class="text-[10px] font-semibold text-slate-500 mb-1">Raw Lift</p>
+          <code class="text-[11px] text-slate-400">GA4-reported conversion rate<br>(includes bot-triggered pixels)</code>
+          <p class="text-[10px] text-slate-600 mt-1">Hardcoded constants — not live Meridian output.</p>
+        </div>
+        <div>
+          <p class="text-[10px] font-semibold text-slate-500 mb-1">Calibrated Lift</p>
+          <code class="text-[11px] text-slate-400">Raw Lift × (1 − bot_contamination_rate)</code>
+          <p class="text-[10px] text-slate-600 mt-1">Meridian receives cleaned BigQuery export (human-only sessions).</p>
+        </div>
+        <div>
+          <p class="text-[10px] font-semibold text-slate-500 mb-1">Bot Inflation</p>
+          <code class="text-[11px] text-slate-400">(Raw − Calibrated) / Calibrated × 100</code>
+          <p class="text-[10px] text-slate-600 mt-1">% by which bot traffic overstated the channel's true lift.</p>
+        </div>
+      </div>
+
+      <!-- Per-channel breakdown table -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-[11px]">
+          <thead>
+            <tr style="border-bottom:1px solid #1e293b;">
+              <th class="text-left py-2 pr-4 text-slate-500 font-semibold uppercase tracking-widest text-[10px]">Channel</th>
+              <th class="text-right py-2 px-3 text-slate-500 font-semibold uppercase tracking-widest text-[10px]">Raw Lift</th>
+              <th class="text-right py-2 px-3 text-slate-500 font-semibold uppercase tracking-widest text-[10px]">Calibrated</th>
+              <th class="text-right py-2 px-3 text-slate-500 font-semibold uppercase tracking-widest text-[10px]">Bot Inflation</th>
+              <th class="text-left py-2 pl-4 text-slate-500 font-semibold uppercase tracking-widest text-[10px]">Interpretation</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #0f172a;">
+              <td class="py-2 pr-4 text-slate-300 font-semibold">Meta Ads</td>
+              <td class="py-2 px-3 text-right" style="color:#f87171;">45%</td>
+              <td class="py-2 px-3 text-right" style="color:#34d399;">17%</td>
+              <td class="py-2 px-3 text-right font-bold" style="color:#fbbf24;">+165%</td>
+              <td class="py-2 pl-4 text-slate-500">Severely overstated — high bot contamination on broad audiences</td>
+            </tr>
+            <tr style="border-bottom:1px solid #0f172a;">
+              <td class="py-2 pr-4 text-slate-300 font-semibold">Google Ads</td>
+              <td class="py-2 px-3 text-right" style="color:#f87171;">38%</td>
+              <td class="py-2 px-3 text-right" style="color:#34d399;">36%</td>
+              <td class="py-2 px-3 text-right font-bold" style="color:#34d399;">+6%</td>
+              <td class="py-2 pl-4 text-slate-500">Stable — intent-based search traffic has low bot share</td>
+            </tr>
+            <tr style="border-bottom:1px solid #0f172a;">
+              <td class="py-2 pr-4 text-slate-300 font-semibold">TikTok Ads</td>
+              <td class="py-2 px-3 text-right" style="color:#f87171;">28%</td>
+              <td class="py-2 px-3 text-right" style="color:#34d399;">11%</td>
+              <td class="py-2 px-3 text-right font-bold" style="color:#fbbf24;">+155%</td>
+              <td class="py-2 pl-4 text-slate-500">High bot exposure from low-CPM display placements</td>
+            </tr>
+            <tr>
+              <td class="py-2 pr-4 text-slate-300 font-semibold">YouTube</td>
+              <td class="py-2 px-3 text-right" style="color:#f87171;">33%</td>
+              <td class="py-2 px-3 text-right" style="color:#34d399;">30%</td>
+              <td class="py-2 px-3 text-right font-bold" style="color:#34d399;">+10%</td>
+              <td class="py-2 pl-4 text-slate-500">Mostly stable — view-through conversions filter bots naturally</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-[10px] text-slate-700 mt-3">All values hardcoded · Production: replace with live Meridian Vertex AI Pipelines output · No Meridian API connected</p>
     </div>
   </section>
 
