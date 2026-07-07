@@ -138,12 +138,14 @@
       <div>
         <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#6366f1;">Raw Sessions</p>
         <code class="text-[11px] text-slate-400">rawSessions[day]</code>
-        <p class="text-[10px] text-slate-600 mt-1">Loaded from pipeline output via <code class="text-slate-500">summary.json</code>.<br>Production: BigQuery <code class="text-slate-500">events_*</code> table.</p>
+        <p class="text-[10px] text-slate-600 mt-1">Loaded from pipeline output via <code class="text-slate-500">summary.json</code>.<br>Production: BigQuery <code class="text-slate-500">events_*</code> table &nbsp;&middot;&nbsp;
+          <a href="https://developers.google.com/analytics/bigquery/web-ecommerce-demo-dataset" target="_blank" style="color:#6366f1;">GA4 public dataset ↗</a></p>
       </div>
       <div>
         <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#10b981;">Cleaned Sessions</p>
         <code class="text-[11px] text-slate-400">raw × (1 − bot_rate)</code>
-        <p class="text-[10px] text-slate-600 mt-1">Vertex AI clustering removes bot sessions before export.<br>Production: <code class="text-slate-500">endpoint.predict()</code> classification.</p>
+        <p class="text-[10px] text-slate-600 mt-1">Vertex AI clustering removes bot sessions before export &nbsp;&middot;&nbsp;
+          <a href="https://cloud.google.com/vertex-ai" target="_blank" style="color:#6366f1;">Vertex AI ↗</a></p>
       </div>
       <div>
         <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#f87171;">Bots Removed %</p>
@@ -203,7 +205,10 @@
       <div>
         <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#10b981;">Edge Score</p>
         <code class="text-[11px] text-slate-400">Math.random() → 0.0–1.0</code>
-        <p class="text-[10px] text-slate-600 mt-1">Simulates Cloud Armor + reCAPTCHA Enterprise.<br>Production: real token score from API.</p>
+        <p class="text-[10px] text-slate-600 mt-1">
+          <a href="https://cloud.google.com/armor" target="_blank" style="color:#6366f1;">Cloud Armor ↗</a> &nbsp;+&nbsp;
+          <a href="https://cloud.google.com/recaptcha-enterprise" target="_blank" style="color:#6366f1;">reCAPTCHA Enterprise ↗</a>
+        </p>
       </div>
       <div>
         <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#818cf8;">Classification</p>
@@ -295,7 +300,8 @@
         <div>
           <p class="text-[10px] font-semibold text-slate-500 mb-1">Calibrated Lift</p>
           <code class="text-[11px] text-slate-400">Raw Lift × (1 − bot_contamination_rate)</code>
-          <p class="text-[10px] text-slate-600 mt-1">Meridian receives cleaned BigQuery export (human-only sessions).</p>
+          <p class="text-[10px] text-slate-600 mt-1">Meridian receives cleaned BigQuery export (human-only sessions) &nbsp;&middot;&nbsp;
+          <a href="https://github.com/google/meridian" target="_blank" style="color:#f59e0b;">github/google/meridian ↗</a></p>
         </div>
         <div>
           <p class="text-[10px] font-semibold text-slate-500 mb-1">Bot Inflation</p>
@@ -384,9 +390,47 @@
          style="max-height:140px; overflow-y:auto;"></div>
   </div>
 
-  <footer class="mt-8 text-center text-[10px] text-slate-700 pb-4">
-    GA4 Enterprise Agent Architecture &nbsp;·&nbsp; Portfolio Demo &nbsp;·&nbsp;
-    All data simulated &nbsp;·&nbsp; No real credentials or GA4 IDs used
+  <footer class="mt-8 pb-6">
+    <!-- References -->
+    <div class="card p-4 mb-4">
+      <p class="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-3">References &amp; Data Sources</p>
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-[10px]">
+        <a href="https://developers.google.com/analytics/bigquery/web-ecommerce-demo-dataset"
+           target="_blank" class="inner-card px-3 py-2 block hover:border-indigo-500 transition-colors" style="border-color:#1e293b;">
+          <p class="font-semibold text-slate-300 mb-0.5">GA4 Public Dataset</p>
+          <p class="text-slate-600">bigquery-public-data · GA4 Obfuscated Sample Ecommerce</p>
+        </a>
+        <a href="https://github.com/google/meridian"
+           target="_blank" class="inner-card px-3 py-2 block hover:border-amber-500 transition-colors" style="border-color:#1e293b;">
+          <p class="font-semibold text-slate-300 mb-0.5">Meridian MMM</p>
+          <p class="text-slate-600">google/meridian · Open-source Bayesian MMM by Google</p>
+        </a>
+        <a href="https://cloud.google.com/armor"
+           target="_blank" class="inner-card px-3 py-2 block hover:border-indigo-500 transition-colors" style="border-color:#1e293b;">
+          <p class="font-semibold text-slate-300 mb-0.5">Cloud Armor</p>
+          <p class="text-slate-600">GCP · DDoS + bot protection · edge risk scoring</p>
+        </a>
+        <a href="https://cloud.google.com/recaptcha-enterprise"
+           target="_blank" class="inner-card px-3 py-2 block hover:border-indigo-500 transition-colors" style="border-color:#1e293b;">
+          <p class="font-semibold text-slate-300 mb-0.5">reCAPTCHA Enterprise</p>
+          <p class="text-slate-600">GCP · 0.0–1.0 token score · server-side validation</p>
+        </a>
+        <a href="https://cloud.google.com/vertex-ai"
+           target="_blank" class="inner-card px-3 py-2 block hover:border-indigo-500 transition-colors" style="border-color:#1e293b;">
+          <p class="font-semibold text-slate-300 mb-0.5">Vertex AI</p>
+          <p class="text-slate-600">GCP · ML pipelines · Isolation Forest clustering</p>
+        </a>
+        <a href="https://support.google.com/google-ads/answer/12429124"
+           target="_blank" class="inner-card px-3 py-2 block hover:border-emerald-500 transition-colors" style="border-color:#1e293b;">
+          <p class="font-semibold text-slate-300 mb-0.5">Value-Based Bidding</p>
+          <p class="text-slate-600">Google Ads · Smart Bidding · conversion value signals</p>
+        </a>
+      </div>
+    </div>
+    <p class="text-center text-[10px] text-slate-700">
+      GA4 Enterprise Agent Architecture &nbsp;·&nbsp; Portfolio Demo &nbsp;·&nbsp;
+      No real credentials or GA4 IDs used
+    </p>
   </footer>
 
 
