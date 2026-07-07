@@ -132,28 +132,28 @@
       </div>
     </div>
 
-    <div style="height:220px; position:relative;">
-      <canvas id="cleaningChart"></canvas>
-    </div>
-
     <!-- Formula Legend: Section 1 -->
-    <div class="mt-4 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-3 gap-3"
+    <div class="mb-4 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-3 gap-3"
          style="background:#0f172a; border:1px solid #1e293b;">
       <div>
         <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#6366f1;">Raw Sessions</p>
         <code class="text-[11px] text-slate-400">rawSessions[day]</code>
-        <p class="text-[10px] text-slate-600 mt-1">Hardcoded mock values — not pulled from GA4 API.<br>Production: BigQuery <code class="text-slate-500">events_*</code> table.</p>
+        <p class="text-[10px] text-slate-600 mt-1">Loaded from pipeline output via <code class="text-slate-500">summary.json</code>.<br>Production: BigQuery <code class="text-slate-500">events_*</code> table.</p>
       </div>
       <div>
         <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#10b981;">Cleaned Sessions</p>
-        <code class="text-[11px] text-slate-400">raw × rand(0.60, 0.68)</code>
-        <p class="text-[10px] text-slate-600 mt-1">Simulates Vertex AI removing 32–40% of traffic as bots.<br>Production: <code class="text-slate-500">endpoint.predict()</code> classification.</p>
+        <code class="text-[11px] text-slate-400">raw × (1 − bot_rate)</code>
+        <p class="text-[10px] text-slate-600 mt-1">Vertex AI clustering removes bot sessions before export.<br>Production: <code class="text-slate-500">endpoint.predict()</code> classification.</p>
       </div>
       <div>
         <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#f87171;">Bots Removed %</p>
         <code class="text-[11px] text-slate-400">(raw − cleaned) / raw × 100</code>
         <p class="text-[10px] text-slate-600 mt-1">Computed from totals across the 7-day window.</p>
       </div>
+    </div>
+
+    <div style="height:220px; position:relative;">
+      <canvas id="cleaningChart"></canvas>
     </div>
   </section>
 
@@ -197,26 +197,8 @@
       </div>
     </div>
 
-    <!-- Live click table -->
-    <div class="rounded-xl overflow-hidden" style="border:1px solid #334155;">
-      <table class="w-full text-[11px]">
-        <thead>
-          <tr style="background:#0f172a; border-bottom:1px solid #334155;">
-            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Time</th>
-            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Client ID</th>
-            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Source</th>
-            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Edge Score</th>
-            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Type</th>
-            <th class="px-4 py-3 text-right text-slate-500 font-semibold uppercase tracking-widest">Conv. Value</th>
-          </tr>
-        </thead>
-        <tbody id="vbb-body"></tbody>
-      </table>
-    </div>
-    <p class="text-[10px] text-slate-700 mt-2 text-right">↑ Live feed — new event every 2s · all values simulated client-side</p>
-
     <!-- Formula Legend: Section 2 -->
-    <div class="mt-4 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-4 gap-3"
+    <div class="mb-4 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-4 gap-3"
          style="background:#0f172a; border:1px solid #1e293b;">
       <div>
         <p class="text-[10px] font-bold uppercase tracking-widest mb-1" style="color:#10b981;">Edge Score</p>
@@ -238,6 +220,24 @@
         <p class="text-[10px] text-slate-600 mt-1">$2.40 = simulated avg CPC.<br>Production: pulled from Google Ads API.</p>
       </div>
     </div>
+
+    <!-- Live click table -->
+    <div class="rounded-xl overflow-hidden" style="border:1px solid #334155;">
+      <table class="w-full text-[11px]">
+        <thead>
+          <tr style="background:#0f172a; border-bottom:1px solid #334155;">
+            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Time</th>
+            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Client ID</th>
+            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Source</th>
+            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Edge Score</th>
+            <th class="px-4 py-3 text-left text-slate-500 font-semibold uppercase tracking-widest">Type</th>
+            <th class="px-4 py-3 text-right text-slate-500 font-semibold uppercase tracking-widest">Conv. Value</th>
+          </tr>
+        </thead>
+        <tbody id="vbb-body"></tbody>
+      </table>
+    </div>
+    <p class="text-[10px] text-slate-700 mt-2 text-right">↑ Live feed — new event every 2s · all values simulated client-side</p>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════
@@ -248,10 +248,10 @@
     <div class="flex flex-wrap items-start justify-between gap-4 mb-5">
       <div>
         <h2 class="text-sm font-semibold text-white flex items-center gap-2">
-          <span style="color:#f59e0b;">◈</span> Meridian MMM &amp; GeoX Incrementality Calibration
+          <span style="color:#f59e0b;">◈</span> Meridian MMM — Channel Incrementality Calibration
         </h2>
         <p class="text-slate-500 text-xs mt-1">
-          Bot traffic inflated Meta Ads lift by ~150% — calibration reveals true channel performance
+          Bot-contaminated signals overstate channel lift — calibration reveals true media performance
         </p>
       </div>
 
@@ -279,12 +279,8 @@
       </span>
     </div>
 
-    <div style="height:250px; position:relative;">
-      <canvas id="meridianChart"></canvas>
-    </div>
-
     <!-- Formula Legend: Section 3 -->
-    <div class="mt-4 rounded-xl p-4" style="background:#0f172a; border:1px solid #1e293b;">
+    <div class="mb-4 rounded-xl p-4" style="background:#0f172a; border:1px solid #1e293b;">
       <p class="text-[10px] font-bold uppercase tracking-widest mb-3" style="color:#f59e0b;">
         Meridian Calibration — How the numbers are calculated
       </p>
@@ -357,6 +353,10 @@
         Install <code>google-meridian</code> for full Bayesian MCMC &middot;
         Media spend synthesized from ROAS assumptions [SYNTHETIC]
       </p>
+    </div>
+
+    <div class="mt-4" style="height:250px; position:relative;">
+      <canvas id="meridianChart"></canvas>
     </div>
   </section>
 
