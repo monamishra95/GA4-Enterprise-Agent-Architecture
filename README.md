@@ -1,14 +1,14 @@
-# GA4 Enterprise Agent Architecture
+# GA4 Enterprise Agent Architecture - Measuring how agents & bots engage with your business
 
-**A Director-Level Product Architecture Brief**
+** Product Architecture Brief**
 
-> Simulating a production-grade, server-side GA4 data pipeline for AI agent detection, BigQuery/Vertex AI signal cleaning, Value-Based Bidding integration, and Meridian MMM incrementality calibration.
+> Simulating a server-side GA4 data pipeline for AI agent detection, BigQuery/Vertex AI signal cleaning, Value-Based Bidding integration, and Meridian MMM incrementality calibration.
 
 ---
 
 ## The Problem This Solves
 
-Client-side analytics is broken — not incrementally, but structurally. LLM scrapers, ad fraud bots, and AI agents now account for a significant share of measured web traffic. They trigger your GA4 tags, inflate your conversion counts, and corrupt the signals your bidding algorithms rely on. The result: your Google Ads Smart Bidding model is learning from noise, your Meridian MMM is attributing lift to bots, and your CPA reports are wrong.
+LLM scrapers, ad fraud bots, and AI agents now account for a significant share of measured web traffic. They trigger GA4 tags, inflate conversion counts, and corrupt the signals that bidding algorithms rely on. The result: Google Ads Smart Bidding model could be learning from noise, the advertiser's Meridian MMM is attributing lift to bots, and advertiser CPA reports could be made more accurate & complete.
 
 This architecture demonstrates how enterprise teams can fix this at the infrastructure layer, not the reporting layer.
 
@@ -54,17 +54,17 @@ User / Bot / LLM Agent
 
 ---
 
-## The V2 Strategy: Why Client-Side Detection Is Dead
+## The V2 Strategy: Gaps in Client-side detection
 
-### The Old Approach (and Why It Failed)
+### The Old Approach and its Deficiencies
 
-Traditional bot detection relied on client-side JavaScript: loading a detection library in the browser, checking mouse movement, fingerprinting the device, and flagging suspicious sessions after the fact. This approach has three fatal flaws in 2025:
+Traditional bot detection relied on client-side JavaScript: loading a detection library in the browser, checking mouse movement, fingerprinting the device, and flagging suspicious sessions after the fact. This approach has three deficiencies:
 
-**Core Web Vitals penalty.** Every third-party JS tag adds render-blocking weight to your page. Detection libraries routinely add 80–200ms to Time to Interactive — a direct hit to your Google Search ranking and Quality Score.
+**Core Web Vitals penalty.** Every third-party JS tag adds render-blocking weight to your page. Detection libraries routinely add 80–200ms to Time to Interactive — which leads to a direct hit to an advertiser's Google Search ranking and Quality Score.
 
-**Ad blocker bypass rate exceeds 40%.** Any detection that runs in the browser can be blocked by the browser. uBlock Origin, Privacy Badger, and enterprise network proxies strip client-side detection tags before they execute. You're blind to the traffic you most need to see.
+**Ad blocker bypass rate exceeds 40%.** The broswer can block any detection that runs in it. uBlock Origin, Privacy Badger, and enterprise network proxies strip client-side detection tags before they execute. 
 
-**LLM agents don't run JavaScript.** GPTBot, ClaudeBot, and most production AI scrapers use `domcontentloaded`-only page fetches. They never execute your GA4 gtag.js, so they never appear in your client-side analytics at all — they simply don't exist in your data. That's worse than seeing them as bots. You can't exclude what you can't measure.
+**LLM agents don't run JavaScript.** GPTBot, ClaudeBot, and most production AI scrapers use `domcontentloaded`-only page fetches. They never execute GA4 gtag.js, so they never appear in your client-side analytics at all. This means they are absent in the data. That's worse than seeing them as bots. You can't exclude what you can't measure.
 
 ### The V2 Approach: Server-Side Edge Detection
 
@@ -84,9 +84,7 @@ The result: 100% hit coverage regardless of ad blockers, zero Core Web Vitals im
 
 ### Why GA4's Raw BigQuery Export Is a Strategic Asset
 
-Most analytics teams treat GA4 as a reporting tool. The V2 architecture treats it as a data warehouse input. GA4's BigQuery export gives you hit-level, unsampled, real-time event data — every page_view, scroll_depth, session_start, and conversion, with all event parameters intact.
-
-This raw stream is the foundation of your ML moat:
+Most analytics teams currently use GA4 as a reporting tool. The V2 architecture treats it as a data warehouse input. GA4's BigQuery export gives an advertiser the hit-level, unsampled, real-time event data — every page_view, scroll_depth, session_start, and conversion, with all event parameters intact. This raw stream is the foundation of your ML moat:
 
 **Feature engineering that GA4 UI never exposes.** Session-level features like `event_velocity_per_sec`, `time_between_events`, and `scroll_depth_vs_session_duration` are trivially computed in BigQuery SQL but invisible in the GA4 interface. These features are your strongest bot detection signals.
 
@@ -132,7 +130,6 @@ Google Ads Smart Bidding optimizes toward conversion value, not conversion volum
 
 ## Meridian MMM & Incrementality Calibration
 
-### Why Your Attribution Numbers Are Wrong — And How to Fix Them
 
 Media Mix Modeling (MMM) measures the incremental lift each channel contributes to business outcomes. The problem: if bots are triggering your GA4 conversion tags, they inflate the measured lift for every channel they interact with.
 
