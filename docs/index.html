@@ -294,7 +294,7 @@
         <div>
           <p class="text-[10px] font-semibold text-slate-500 mb-1">Raw Lift</p>
           <code class="text-[11px] text-slate-400">GA4-reported conversion rate<br>(includes bot-triggered pixels)</code>
-          <p class="text-[10px] text-slate-600 mt-1">Hardcoded constants — not live Meridian output.</p>
+          <p class="text-[10px] text-slate-600 mt-1">From pipeline output via <code>summary.json</code> &mdash; loaded on page open.</p>
         </div>
         <div>
           <p class="text-[10px] font-semibold text-slate-500 mb-1">Calibrated Lift</p>
@@ -321,38 +321,42 @@
             </tr>
           </thead>
           <tbody>
-            <tr style="border-bottom:1px solid #0f172a;">
-              <td class="py-2 pr-4 text-slate-300 font-semibold">Meta Ads</td>
-              <td class="py-2 px-3 text-right" style="color:#f87171;">45%</td>
-              <td class="py-2 px-3 text-right" style="color:#34d399;">17%</td>
-              <td class="py-2 px-3 text-right font-bold" style="color:#fbbf24;">+165%</td>
-              <td class="py-2 pl-4 text-slate-500">Severely overstated — high bot contamination on broad audiences</td>
-            </tr>
-            <tr style="border-bottom:1px solid #0f172a;">
+            <tr id="mmm-row-0" style="border-bottom:1px solid #0f172a;">
               <td class="py-2 pr-4 text-slate-300 font-semibold">Google Ads</td>
-              <td class="py-2 px-3 text-right" style="color:#f87171;">38%</td>
-              <td class="py-2 px-3 text-right" style="color:#34d399;">36%</td>
-              <td class="py-2 px-3 text-right font-bold" style="color:#34d399;">+6%</td>
-              <td class="py-2 pl-4 text-slate-500">Stable — intent-based search traffic has low bot share</td>
+              <td class="py-2 px-3 text-right" style="color:#f87171;">37.2%</td>
+              <td class="py-2 px-3 text-right" style="color:#34d399;">35.7%</td>
+              <td class="py-2 px-3 text-right font-bold" style="color:#fbbf24;">48.3%</td>
+              <td class="py-2 pl-4 text-slate-500">Moderate bot inflation — intent-based search audience has ~48% bot share in this dataset</td>
             </tr>
-            <tr style="border-bottom:1px solid #0f172a;">
-              <td class="py-2 pr-4 text-slate-300 font-semibold">TikTok Ads</td>
-              <td class="py-2 px-3 text-right" style="color:#f87171;">28%</td>
-              <td class="py-2 px-3 text-right" style="color:#34d399;">11%</td>
-              <td class="py-2 px-3 text-right font-bold" style="color:#fbbf24;">+155%</td>
-              <td class="py-2 pl-4 text-slate-500">High bot exposure from low-CPM display placements</td>
+            <tr id="mmm-row-1" style="border-bottom:1px solid #0f172a;">
+              <td class="py-2 pr-4 text-slate-300 font-semibold">Meta Ads</td>
+              <td class="py-2 px-3 text-right" style="color:#f87171;">28.5%</td>
+              <td class="py-2 px-3 text-right" style="color:#34d399;">29.3%</td>
+              <td class="py-2 px-3 text-right font-bold" style="color:#fbbf24;">44.5%</td>
+              <td class="py-2 pl-4 text-slate-500">High bot contamination on broad paid social audiences — calibrate before budget planning</td>
             </tr>
-            <tr>
-              <td class="py-2 pr-4 text-slate-300 font-semibold">YouTube</td>
-              <td class="py-2 px-3 text-right" style="color:#f87171;">33%</td>
-              <td class="py-2 px-3 text-right" style="color:#34d399;">30%</td>
-              <td class="py-2 px-3 text-right font-bold" style="color:#34d399;">+10%</td>
-              <td class="py-2 pl-4 text-slate-500">Mostly stable — view-through conversions filter bots naturally</td>
+            <tr id="mmm-row-2" style="border-bottom:1px solid #0f172a;">
+              <td class="py-2 pr-4 text-slate-300 font-semibold">Bing Ads</td>
+              <td class="py-2 px-3 text-right" style="color:#f87171;">20.3%</td>
+              <td class="py-2 px-3 text-right" style="color:#34d399;">21.0%</td>
+              <td class="py-2 px-3 text-right font-bold" style="color:#fbbf24;">44.2%</td>
+              <td class="py-2 pl-4 text-slate-500">Similar bot rate to Meta — smaller volume means lower absolute spend impact</td>
+            </tr>
+            <tr id="mmm-row-3">
+              <td class="py-2 pr-4 text-slate-300 font-semibold">Display</td>
+              <td class="py-2 px-3 text-right" style="color:#f87171;">14.0%</td>
+              <td class="py-2 px-3 text-right" style="color:#34d399;">14.0%</td>
+              <td class="py-2 px-3 text-right font-bold" style="color:#fbbf24;">45.9%</td>
+              <td class="py-2 pl-4 text-slate-500">Lowest share channel — high bot rate typical for programmatic display inventory</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p class="text-[10px] text-slate-700 mt-3">All values hardcoded · Production: replace with live Meridian Vertex AI Pipelines output · No Meridian API connected</p>
+      <p class="text-[10px] text-slate-600 mt-3">
+        Channel attribution from pipeline output (mock mode) &middot;
+        Install <code>google-meridian</code> for full Bayesian MCMC &middot;
+        Media spend synthesized from ROAS assumptions [SYNTHETIC]
+      </p>
     </div>
   </section>
 
