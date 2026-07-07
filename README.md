@@ -186,8 +186,12 @@ The pipeline supports two modes:
 **Mock mode** (`--mock`) — generates synthetic data with no GCP credentials required.
 
 ```bash
-# Install dependencies
+# Install dependencies (core pipeline)
 pip install pandas numpy google-cloud-bigquery db-dtypes
+
+# Optional: install google-meridian for real Bayesian MMM in Step 6
+# Without it, Step 6 runs a channel attribution fallback (numpy-based).
+pip install google-meridian
 
 # One-time GCP setup (BigQuery mode only)
 # 1. Create a free GCP project at https://console.cloud.google.com
@@ -203,9 +207,11 @@ python scripts/bq_vertex_pipeline.py
 python scripts/bq_vertex_pipeline.py --mock
 ```
 
-Output: `data/raw_ga4_events.csv` and `data/cleaned_ga4_events.csv`
+Output: `data/raw_ga4_events.csv`, `data/cleaned_ga4_events.csv`, and `docs/data/summary.json`
 
-> **Note:** `edge_score` (Cloud Armor) and `mouse_move_events` (client-side JS) are not part of the GA4 BigQuery schema — they are simulated from real session signals in both modes and labelled `SIMULATED` in the CSV output.
+Commit `docs/data/summary.json` after each run to push real pipeline data to the live GitHub Pages dashboard.
+
+> **Note:** `edge_score` (Cloud Armor) and `mouse_move_events` (client-side JS) are not part of the GA4 BigQuery schema — they are simulated from real session signals in both modes and labelled `SIMULATED` in the CSV output. Media spend in Step 6 (Meridian MMM) is similarly synthesized from conversion values and ROAS assumptions, labelled `SYNTHETIC`, because real ad account spend is not part of the GA4 schema.
 
 ### 3. Playwright Traffic Spawner
 
@@ -244,6 +250,6 @@ No real GCP credentials, GA4 Measurement IDs, or API keys are used in this repos
 
 - **Google Analytics 4** — Measurement Protocol, BigQuery export schema, Enhanced Conversions
 - **Google Cloud Platform** — Cloud Armor, reCAPTCHA Enterprise, Vertex AI, BigQuery, Server-Side GTM
-- **Python** — pandas, numpy, google-cloud-bigquery, Playwright async automation
-- **Marketing Science** — Media Mix Modeling (Meridian), Value-Based Bidding, incrementality testing
+- **Python** — pandas, numpy, google-cloud-bigquery, google-meridian (Bayesian MMM), Playwright async automation
+- **Marketing Science** — Media Mix Modeling (google/meridian open-source), Value-Based Bidding, incrementality testing, channel attribution
 - **Frontend** — Zero-dependency dark-mode dashboard (HTML + Tailwind CDN + Chart.js)

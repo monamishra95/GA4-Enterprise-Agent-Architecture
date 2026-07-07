@@ -1,42 +1,9 @@
 """
-GA4 Enterprise Agent Architecture — BigQuery & Vertex AI Pipeline
-=================================================================
-Queries the publicly available GA4 Obfuscated Sample Ecommerce dataset on
-Google BigQuery, then runs bot classification and exports the cleaned signal.
-
-  Dataset : bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*
-            Google Merchandise Store · Nov 2020 – Jan 2021 · privacy-obfuscated
-            Free to query: first 1 TB/month at no cost under GCP free tier.
-
-  Pipeline:
-    Step 1  fetch_ga4_public_data()   — real session-level rows from BigQuery
-    Step 2  enrich_with_edge_signals() — simulate Cloud Armor edge score (not in GA4)
-    Step 3  vertex_ai_clustering()    — classify Human / LLM_Scraper / Ad_Fraud
-    Step 4  export_cleaned_data()     — human-only CSV → VBB + Meridian MMM payload
-
-  Modes:
-    bigquery  (default)  queries real GA4 data — requires GCP project + credentials
-    mock      (--mock)   generates synthetic data — no GCP needed, works offline
-
-  Run:
-    python scripts/bq_vertex_pipeline.py                   # BigQuery mode
-    python scripts/bq_vertex_pipeline.py --mock            # Offline / no-GCP mode
-    PIPELINE_MODE=mock python scripts/bq_vertex_pipeline.py
-
-  GCP Setup (one-time, takes ~5 minutes):
-    1. Create a free GCP project → https://console.cloud.google.com
-    2. Run: gcloud auth application-default login
-    3. Set GCP_PROJECT_ID below (or export GCP_PROJECT_ID=your-project-id)
-    4. pip install google-cloud-bigquery db-dtypes pandas numpy
-
-  Note on edge_score and mouse_move_events:
-    These signals come from Cloud Armor / reCAPTCHA Enterprise and client-side
-    JS, respectively — neither is exported to the GA4 BigQuery schema. In
-    BigQuery mode they are simulated from real session features (duration,
-    device, source) and are clearly labelled SIMULATED in the output.
+GA4 Enterprise Agent Architecture -- BigQuery & Vertex AI Pipeline
+Steps 1-6: Fetch -> Enrich -> Classify -> Clean -> Summarize -> Meridian MMM
 """
-
 import argparse
+import json
 import os
 import random
 import string
@@ -45,109 +12,69 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
-# ─────────────────────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────────────────────
-
-# [REQUIRED for BigQuery mode] Your GCP project ID (billing must be enabled,
-# but the first 1 TB/month queried is free under the GCP free tier).
-# Override at runtime: export GCP_PROJECT_ID=my-gcp-project
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "YOUR_GCP_PROJECT_ID")
-
-# Public dataset — no changes needed
+GCP_PROJECT_ID    = os.getenv("GCP_PROJECT_ID", "YOUR_GCP_PROJECT_ID")
 BQ_PUBLIC_DATASET = "bigquery-public-data.ga4_obfuscated_sample_ecommerce"
-BQ_DATE_START     = "20201101"   # Nov 2020
-BQ_DATE_END       = "20210131"   # Jan 2021
-
-# [PRODUCTION] Your own GA4 BigQuery export — replace the public dataset above
-# with these when pointing at a real property:
-PROD_PROJECT_ID    = "YOUR_GCP_PROJECT_ID"
-PROD_BQ_DATASET    = "YOUR_BIGQUERY_DATASET"   # e.g. "analytics_123456789"
-PROD_BQ_TABLE      = "events_*"
-
-# [PRODUCTION] Vertex AI endpoint (replace rule-based classifier in Step 3)
+BQ_DATE_START     = "20201101"
+BQ_DATE_END       = "20210131"
 VERTEX_AI_ENDPOINT = "YOUR_VERTEX_AI_ENDPOINT_ID"
 VERTEX_AI_REGION   = "us-central1"
-
 OUTPUT_DIR  = "data"
 RAW_CSV     = os.path.join(OUTPUT_DIR, "raw_ga4_events.csv")
 CLEANED_CSV = os.path.join(OUTPUT_DIR, "cleaned_ga4_events.csv")
-
 N_SESSIONS  = 1000
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 random.seed(RANDOM_SEED)
 
-
-# ══════════════════════════════════════════════════════════════
-# STEP 1A: FETCH REAL GA4 DATA FROM BIGQUERY (BigQuery mode)
-#
-# Queries the public GA4 Obfuscated Sample Ecommerce dataset.
-# Aggregates event-level rows into one row per session with
-# behavioral features directly derivable from the GA4 schema:
-#   session_duration_sec  — real (from MIN/MAX event_timestamp)
-#   event_velocity_per_sec — real (total_events / session_duration)
-#   click_events          — real (COUNTIF event_name = 'click')
-#   page_scroll_depth_pct — real (max percent_scrolled param)
-#   source_medium         — real (traffic_source.source / medium)
-#   geo_country           — real (geo.country)
-#
-# [PRODUCTION] Swap BQ_PUBLIC_DATASET for your own GA4 export:
-#   `{PROD_PROJECT_ID}.{PROD_BQ_DATASET}.{PROD_BQ_TABLE}`
-# ══════════════════════════════════════════════════════════════
-
 GA4_SESSION_QUERY = """
 WITH sessions AS (
   SELECT
-    user_pseudo_id                                                    AS client_id,
-    (SELECT value.int_value  FROM UNNEST(event_params) WHERE key = 'ga_session_id')
-                                                                      AS session_id,
-    MIN(event_timestamp)                                              AS session_start_us,
-    MAX(event_timestamp)                                              AS session_end_us,
+    user_pseudo_id AS client_id,
+    (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'ga_session_id') AS session_id,
+    MIN(event_timestamp) AS session_start_us,
+    MAX(event_timestamp) AS session_end_us,
     TIMESTAMP_DIFF(
       TIMESTAMP_MICROS(MAX(event_timestamp)),
       TIMESTAMP_MICROS(MIN(event_timestamp)),
       SECOND
-    )                                                                 AS session_duration_sec,
-    COUNT(*)                                                          AS total_events,
-    COUNTIF(event_name IN ('click', 'user_engagement'))               AS click_events,
-    COUNTIF(event_name = 'scroll')                                    AS scroll_events,
+    ) AS session_duration_sec,
+    COUNT(*) AS total_events,
+    COUNTIF(event_name IN ('click', 'user_engagement')) AS click_events,
+    COUNTIF(event_name = 'scroll') AS scroll_events,
     MAX(COALESCE(
       (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'percent_scrolled'),
       0
-    ))                                                                AS max_scroll_pct,
+    )) AS max_scroll_pct,
     ANY_VALUE(CONCAT(
       COALESCE(traffic_source.source, '(direct)'), ' / ',
       COALESCE(traffic_source.medium, '(none)')
-    ))                                                                AS source_medium,
-    ANY_VALUE(COALESCE(geo.country, 'Unknown'))                       AS geo_country,
-    ANY_VALUE(device.category)                                        AS device_category,
+    )) AS source_medium,
+    ANY_VALUE(COALESCE(geo.country, 'Unknown')) AS geo_country,
+    ANY_VALUE(device.category) AS device_category,
     ANY_VALUE(COALESCE(
       (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'page_location'),
       '/'
-    ))                                                                AS landing_page
+    )) AS landing_page
   FROM `{dataset}.events_*`
   WHERE _TABLE_SUFFIX BETWEEN '{date_start}' AND '{date_end}'
     AND event_name IN (
-      'page_view', 'session_start', 'scroll', 'click',
-      'user_engagement', 'purchase', 'add_to_cart', 'view_item'
+      'page_view','session_start','scroll','click',
+      'user_engagement','purchase','add_to_cart','view_item'
     )
   GROUP BY 1, 2
 )
 SELECT
   client_id,
-  FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S',
-    TIMESTAMP_MICROS(session_start_us))                               AS event_timestamp,
-  GREATEST(session_duration_sec, 0)                                   AS session_duration_sec,
+  FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S', TIMESTAMP_MICROS(session_start_us)) AS event_timestamp,
+  GREATEST(session_duration_sec, 0) AS session_duration_sec,
   total_events,
   click_events,
   scroll_events,
-  COALESCE(max_scroll_pct, 0)                                         AS page_scroll_depth_pct,
-  ROUND(SAFE_DIVIDE(total_events, GREATEST(session_duration_sec, 1)), 2)
-                                                                      AS event_velocity_per_sec,
+  COALESCE(max_scroll_pct, 0) AS page_scroll_depth_pct,
+  ROUND(SAFE_DIVIDE(total_events, GREATEST(session_duration_sec, 1)), 2) AS event_velocity_per_sec,
   source_medium,
   geo_country,
-  COALESCE(device_category, 'desktop')                                AS device_category,
+  COALESCE(device_category, 'desktop') AS device_category,
   landing_page
 FROM sessions
 WHERE session_id IS NOT NULL
@@ -156,334 +83,184 @@ LIMIT {n_sessions}
 """
 
 
-def fetch_ga4_public_data(n_sessions: int = N_SESSIONS) -> pd.DataFrame:
-    """
-    Queries the GA4 Obfuscated Sample Ecommerce public dataset on BigQuery.
-    Returns one row per session with real behavioral features.
-
-    Requires:
-      - GCP project with billing enabled (first 1TB/month free)
-      - Application Default Credentials: gcloud auth application-default login
-      - pip install google-cloud-bigquery db-dtypes
-    """
+def fetch_ga4_public_data(n_sessions=N_SESSIONS):
     try:
-        from google.cloud import bigquery   # type: ignore
+        from google.cloud import bigquery
     except ImportError:
         print("\n[ERROR] google-cloud-bigquery not installed.")
         print("        Run: pip install google-cloud-bigquery db-dtypes")
-        print("        Then re-run this script, or use --mock for offline mode.\n")
+        print("        Or use --mock for offline mode.\n")
         sys.exit(1)
-
     if GCP_PROJECT_ID == "YOUR_GCP_PROJECT_ID":
         print("\n[ERROR] GCP_PROJECT_ID is not set.")
-        print("        Set it at the top of this script, or:")
-        print("        export GCP_PROJECT_ID=my-gcp-project")
-        print("        Or run in offline mode: python scripts/bq_vertex_pipeline.py --mock\n")
+        print("        Set it in the script or: export GCP_PROJECT_ID=my-project")
+        print("        Or run: python scripts/bq_vertex_pipeline.py --mock\n")
         sys.exit(1)
-
     print(f"\n[Step 1] Querying GA4 public dataset on BigQuery...")
-    print(f"         Dataset  : {BQ_PUBLIC_DATASET}.events_*")
-    print(f"         Dates    : {BQ_DATE_START} → {BQ_DATE_END}  (Nov 2020 – Jan 2021)")
-    print(f"         Sessions : {n_sessions:,}")
-    print(f"         Project  : {GCP_PROJECT_ID}  (billing project for query costs)")
-    print(f"         Est. cost: < 0.001 TB → well within 1TB free tier\n")
-
+    print(f"         Dataset : {BQ_PUBLIC_DATASET}.events_*")
+    print(f"         Dates   : {BQ_DATE_START} to {BQ_DATE_END}")
+    print(f"         Project : {GCP_PROJECT_ID}")
     client = bigquery.Client(project=GCP_PROJECT_ID)
-
-    query = GA4_SESSION_QUERY.format(
-        dataset    = BQ_PUBLIC_DATASET,
-        date_start = BQ_DATE_START,
-        date_end   = BQ_DATE_END,
-        n_sessions = n_sessions,
+    query  = GA4_SESSION_QUERY.format(
+        dataset=BQ_PUBLIC_DATASET, date_start=BQ_DATE_START,
+        date_end=BQ_DATE_END, n_sessions=n_sessions,
     )
-
-    print("         Running query...")
     df = client.query(query).to_dataframe()
-
     if df.empty:
-        print("[ERROR] Query returned 0 rows. Check dataset access and date range.")
+        print("[ERROR] Query returned 0 rows.")
         sys.exit(1)
-
-    print(f"         ✓ Fetched {len(df):,} real GA4 sessions from BigQuery")
-    print(f"           Columns: {list(df.columns)}")
-
-    # Normalise types
-    df["session_duration_sec"]    = df["session_duration_sec"].fillna(0).astype(int)
-    df["click_events"]            = df["click_events"].fillna(0).astype(int)
-    df["scroll_events"]           = df["scroll_events"].fillna(0).astype(int)
-    df["page_scroll_depth_pct"]   = df["page_scroll_depth_pct"].fillna(0).astype(int)
-    df["event_velocity_per_sec"]  = df["event_velocity_per_sec"].fillna(1.0).astype(float)
-
-    # Show source distribution
+    print(f"         Fetched {len(df):,} real GA4 sessions")
+    df["session_duration_sec"]   = df["session_duration_sec"].fillna(0).astype(int)
+    df["click_events"]           = df["click_events"].fillna(0).astype(int)
+    df["scroll_events"]          = df["scroll_events"].fillna(0).astype(int)
+    df["page_scroll_depth_pct"]  = df["page_scroll_depth_pct"].fillna(0).astype(int)
+    df["event_velocity_per_sec"] = df["event_velocity_per_sec"].fillna(1.0).astype(float)
     top_sources = df["source_medium"].value_counts().head(5)
-    print(f"\n         Top traffic sources in real data:")
+    print(f"\n         Top sources:")
     for src, cnt in top_sources.items():
         print(f"           {src:<35} {cnt:>5} sessions")
-
     return df
 
 
-# ══════════════════════════════════════════════════════════════
-# STEP 1B: SYNTHETIC DATA GENERATOR (--mock / offline mode)
-#
-# Used when no GCP credentials are available.
-# Generates 1,000 rows with distributions across three traffic
-# types to demonstrate bot detection. Kept as fallback.
-# ══════════════════════════════════════════════════════════════
-
-def _random_ip(is_bot: bool) -> str:
-    if is_bot:
-        prefixes = ["66.249", "40.77", "157.55", "207.46", "54.173", "34.86"]
-        return f"{random.choice(prefixes)}.{random.randint(1,254)}.{random.randint(1,254)}"
-    return ".".join(str(random.randint(1, 254)) for _ in range(4))
-
-
-def generate_mock_ga4_data(n: int = N_SESSIONS) -> pd.DataFrame:
-    """
-    [MOCK / OFFLINE] Generates n synthetic GA4 session rows.
-    Used when --mock flag is passed or no GCP credentials are available.
-    Traffic split: 55% Human · 25% LLM_Scraper · 20% Ad_Fraud
-    """
+def generate_mock_ga4_data(n=N_SESSIONS):
+    """[MOCK] Generates n synthetic GA4 session rows.
+    Traffic split: 55% Human, 25% LLM_Scraper, 20% Ad_Fraud"""
     print(f"\n[Step 1] Generating {n:,} synthetic GA4 sessions (offline mock mode)...")
-    print("         [NOTE] No BigQuery connection — all data is fabricated.")
-
     traffic_types = np.random.choice(
         ["Human", "LLM_Scraper", "Ad_Fraud"], size=n, p=[0.55, 0.25, 0.20]
     )
-
     base_time = datetime(2025, 1, 6, 8, 0, 0)
-    sources   = ["google / cpc", "meta / paid_social", "direct / (none)",
-                 "bing / cpc", "programmatic / display"]
-    countries = ["US", "GB", "CA", "AU", "DE", "BR", "IN", "FR", "NL", "SG"]
-    pages     = ["/", "/pricing", "/about", "/blog/ai-detection", "/contact", "/demo"]
-    devices   = ["desktop", "mobile", "tablet"]
-
-    rows = []
+    sources   = ["google / cpc","meta / paid_social","direct / (none)","bing / cpc","programmatic / display"]
+    countries = ["US","GB","CA","AU","DE","BR","IN","FR","NL","SG"]
+    pages     = ["/","/pricing","/about","/blog/ai-detection","/contact","/demo"]
+    devices   = ["desktop","mobile","tablet"]
+    rows    = []
     elapsed = 0
-
     for t_type in traffic_types:
         is_human   = (t_type == "Human")
         is_scraper = (t_type == "LLM_Scraper")
-
         session_duration = (
-            random.randint(45, 600) if is_human  else
-            random.randint(0, 6)    if is_scraper else
-            random.randint(0, 3)
+            random.randint(45,600) if is_human else
+            random.randint(0,6)    if is_scraper else
+            random.randint(0,3)
         )
-        click_events   = random.randint(1, 12) if is_human else 0
-        scroll_events  = random.randint(2, 15) if is_human else 0
-        scroll_depth   = random.randint(35, 95) if is_human else random.randint(0, 8)
-        total_events   = (
-            random.randint(4, 20)  if is_human  else
-            random.randint(1, 3)   if is_scraper else
-            random.randint(1, 2)
+        click_events  = random.randint(1,12) if is_human else 0
+        scroll_events = random.randint(2,15) if is_human else 0
+        scroll_depth  = random.randint(35,95) if is_human else random.randint(0,8)
+        total_events  = (
+            random.randint(4,20) if is_human else
+            random.randint(1,3)  if is_scraper else
+            random.randint(1,2)
         )
-        velocity = round(total_events / max(session_duration, 1), 2)
-
+        velocity = round(total_events / max(session_duration,1), 2)
         elapsed += random.uniform(0.3, 6.0)
         rows.append({
-            "client_id"              : ''.join(random.choices(string.ascii_uppercase + string.digits, k=12)),
-            "event_timestamp"        : (base_time + timedelta(seconds=elapsed)).isoformat(),
-            "session_duration_sec"   : session_duration,
-            "total_events"           : total_events,
-            "click_events"           : click_events,
-            "scroll_events"          : scroll_events,
-            "page_scroll_depth_pct"  : scroll_depth,
-            "event_velocity_per_sec" : velocity,
-            "source_medium"          : random.choice(sources),
-            "geo_country"            : random.choice(countries),
-            "device_category"        : random.choice(devices),
-            "landing_page"           : random.choice(pages),
-            "raw_traffic_label"      : t_type,   # ground truth for validation
+            "client_id"             : "".join(random.choices(string.ascii_uppercase+string.digits, k=12)),
+            "event_timestamp"       : (base_time + timedelta(seconds=elapsed)).isoformat(),
+            "session_duration_sec"  : session_duration,
+            "total_events"          : total_events,
+            "click_events"          : click_events,
+            "scroll_events"         : scroll_events,
+            "page_scroll_depth_pct" : scroll_depth,
+            "event_velocity_per_sec": velocity,
+            "source_medium"         : random.choice(sources),
+            "geo_country"           : random.choice(countries),
+            "device_category"       : random.choice(devices),
+            "landing_page"          : random.choice(pages),
+            "raw_traffic_label"     : t_type,
         })
-
-    df = pd.DataFrame(rows)
+    df   = pd.DataFrame(rows)
     dist = dict(pd.Series(traffic_types).value_counts())
-    print(f"         Distribution : {dist}")
+    print(f"         Distribution: {dist}")
     return df
 
 
-# ══════════════════════════════════════════════════════════════
-# STEP 2: ENRICH WITH SIMULATED EDGE SIGNALS
-#
-# Two features cannot be derived from the GA4 BigQuery schema:
-#
-#   edge_score        — set by Cloud Armor / reCAPTCHA Enterprise
-#                       at the network edge, before hits reach GA4.
-#                       Simulated here from device + source signals.
-#
-#   mouse_move_events — client-side JS behavioral signal, not a
-#                       standard GA4 event. Simulated from session
-#                       duration and click count.
-#
-# Both are clearly marked SIMULATED in the exported CSV.
-# In production they would come from Server-Side GTM custom variables.
-# ══════════════════════════════════════════════════════════════
-
-def enrich_with_edge_signals(df: pd.DataFrame, is_real_data: bool = True) -> pd.DataFrame:
-    """
-    Adds edge_score and mouse_move_events to real BigQuery rows.
-    For mock data, these were already set to realistic values by the generator.
-    Labels both columns as SIMULATED so downstream consumers know their origin.
-    """
+def enrich_with_edge_signals(df, is_real_data=True):
+    """Adds edge_score and mouse_move_events.
+    Both are [SIMULATED] -- not part of the GA4 BigQuery schema."""
     if not is_real_data:
-        # Mock data: derive edge scores from raw_traffic_label ground truth
-        def _edge_from_label(row):
+        def _edge(row):
             if row["raw_traffic_label"] == "Human":
-                return round(float(np.random.beta(8, 2)), 3)
+                return round(float(np.random.beta(8,2)),3)
             elif row["raw_traffic_label"] == "LLM_Scraper":
-                return round(float(np.random.beta(2, 6)), 3)
+                return round(float(np.random.beta(2,6)),3)
             else:
-                return round(float(np.random.beta(1, 9)), 3)
-        df["edge_score"]        = df.apply(_edge_from_label, axis=1)
+                return round(float(np.random.beta(1,9)),3)
+        df["edge_score"] = df.apply(_edge, axis=1)
         df["mouse_move_events"] = df.apply(
-            lambda r: random.randint(20, 250) if r["raw_traffic_label"] == "Human" else 0, axis=1
+            lambda r: random.randint(20,250) if r["raw_traffic_label"]=="Human" else 0, axis=1
         )
         return df
 
-    print(f"\n[Step 2] Enriching {len(df):,} real GA4 sessions with simulated edge signals...")
-    print("         edge_score        — [SIMULATED] Cloud Armor / reCAPTCHA not in GA4 schema")
-    print("         mouse_move_events — [SIMULATED] client-side JS signal not in GA4 schema")
-
-    edge_scores      = []
-    mouse_move_list  = []
-
+    print(f"\n[Step 2] Enriching {len(df):,} real sessions with simulated edge signals...")
+    print("         edge_score        -- [SIMULATED] Cloud Armor not in GA4 schema")
+    print("         mouse_move_events -- [SIMULATED] client-side JS not in GA4 schema")
+    edge_scores = []
+    mouse_list  = []
     for _, row in df.iterrows():
         duration = row["session_duration_sec"]
         velocity = row["event_velocity_per_sec"]
-        device   = str(row.get("device_category", "desktop")).lower()
-        source   = str(row.get("source_medium", "")).lower()
-
-        # ── Simulate edge_score from available session signals ────────
-        # Real humans from search / direct on desktop/mobile → high scores.
-        # High-velocity, zero-duration sessions → low scores (suspicious).
+        source   = str(row.get("source_medium","")).lower()
         if duration >= 30 and velocity <= 5 and row["click_events"] > 0:
-            # Looks like a genuine engaged session
-            score = round(float(np.random.beta(8, 2)), 3)   # 0.65–0.98 range
+            score = round(float(np.random.beta(8,2)),3)
         elif duration <= 2 or velocity > 15:
-            # Very short or very fast — bot signal
             if "programmatic" in source or "display" in source:
-                score = round(float(np.random.beta(1, 8)), 3)  # 0.02–0.25
+                score = round(float(np.random.beta(1,8)),3)
             else:
-                score = round(float(np.random.beta(2, 6)), 3)  # 0.10–0.45
+                score = round(float(np.random.beta(2,6)),3)
         else:
-            # Ambiguous — mid-range score
-            score = round(float(np.random.beta(5, 4)), 3)      # 0.35–0.75
-
-        # ── Simulate mouse_move_events from engagement proxies ────────
-        # Real GA4 has scroll % and click events — use these as proxies.
+            score = round(float(np.random.beta(5,4)),3)
         if row["click_events"] > 0 or row["scroll_events"] > 0:
-            # Engaged session: scale mouse moves with duration
-            mouse = random.randint(
-                max(5, int(duration * 0.3)),
-                min(300, int(duration * 0.8))
-            )
+            lo    = max(5, int(duration * 0.3))
+            hi    = max(lo, min(300, int(duration * 0.8)))
+            mouse = random.randint(lo, hi)
         else:
-            mouse = 0   # No engagement signals → likely no mouse movement
-
+            mouse = 0
         edge_scores.append(score)
-        mouse_move_list.append(mouse)
-
+        mouse_list.append(mouse)
     df = df.copy()
-    df["edge_score"]        = edge_scores
-    df["mouse_move_events"] = mouse_move_list
-
-    # Add provenance flag so downstream knows which signals are real vs simulated
-    df["edge_score_source"]        = "SIMULATED (Cloud Armor not in GA4 schema)"
-    df["mouse_move_events_source"] = "SIMULATED (client-side signal not in GA4 schema)"
-
-    print(f"         ✓ Edge score range   : {df['edge_score'].min():.3f} – {df['edge_score'].max():.3f}")
-    print(f"         ✓ Mean edge score    : {df['edge_score'].mean():.3f}  (real data → mostly high)")
-
+    df["edge_score"]               = edge_scores
+    df["mouse_move_events"]        = mouse_list
+    df["edge_score_source"]        = "SIMULATED"
+    df["mouse_move_events_source"] = "SIMULATED"
+    print(f"         Score range: {df['edge_score'].min():.3f} to {df['edge_score'].max():.3f}")
     return df
 
 
-# ══════════════════════════════════════════════════════════════
-# STEP 3: VERTEX AI CLUSTERING
-#
-# [MOCK]       Rule-based classifier that mirrors what a trained
-#              Isolation Forest / K-Means model learns from the
-#              four primary features.
-#
-# [PRODUCTION] Replace classify_row() with a Vertex AI call:
-#
-#   from google.cloud import aiplatform
-#   aiplatform.init(project=GCP_PROJECT_ID, location=VERTEX_AI_REGION)
-#   endpoint  = aiplatform.Endpoint(VERTEX_AI_ENDPOINT)
-#   FEATURES  = ["edge_score", "event_velocity_per_sec",
-#                "session_duration_sec", "mouse_move_events",
-#                "page_scroll_depth_pct"]
-#   instances = df[FEATURES].values.tolist()
-#   response  = endpoint.predict(instances=instances)
-#   df["vertex_ai_classification"] = [p["label"] for p in response.predictions]
-# ══════════════════════════════════════════════════════════════
-
-def vertex_ai_clustering(df: pd.DataFrame, has_ground_truth: bool = False) -> pd.DataFrame:
-    """
-    Classifies each session as Human / LLM_Scraper / Ad_Fraud using a
-    rule hierarchy that mirrors what a trained Vertex AI model learns.
-
-    For real BigQuery data: no ground-truth labels exist, so accuracy
-    metrics are skipped. The distribution itself is the output.
-    """
+def vertex_ai_clustering(df, has_ground_truth=False):
+    """Rule-based classifier mirroring Vertex AI Isolation Forest output.
+    [PRODUCTION] Replace with: endpoint.predict(instances=df[FEATURES].tolist())"""
     print(f"\n[Step 3] Running Vertex AI classification on {len(df):,} sessions...")
-    print("         [PRODUCTION] This would call your trained Vertex AI endpoint.")
-
-    def classify_row(row) -> str:
+    def classify_row(row):
         score    = row["edge_score"]
         velocity = row["event_velocity_per_sec"]
         duration = row["session_duration_sec"]
         mouse    = row["mouse_move_events"]
-
-        # Rule 1: Ad Fraud — very low score + extreme event velocity
         if score < 0.20 and velocity > 20:
             return "Ad_Fraud"
-
-        # Rule 2: LLM Scraper — low score + high velocity + no behavioral signals
         if score < 0.48 and velocity > 8 and duration < 10 and mouse == 0:
             return "LLM_Scraper"
-
-        # Rule 3: Confirmed Human — high score + normal velocity + engagement
         if score >= 0.55 and velocity <= 5 and duration >= 30 and mouse > 0:
             return "Human"
-
-        # Rule 4: Edge-score tiebreaker for ambiguous sessions
         if score >= 0.62:
             return "Human"
         elif score >= 0.38:
             return "LLM_Scraper"
         else:
             return "Ad_Fraud"
-
     df = df.copy()
     df["vertex_ai_classification"] = df.apply(classify_row, axis=1)
     pred_dist = dict(df["vertex_ai_classification"].value_counts())
-    print(f"         Classification result : {pred_dist}")
-
+    print(f"         Result: {pred_dist}")
     if has_ground_truth and "raw_traffic_label" in df.columns:
         accuracy = (df["vertex_ai_classification"] == df["raw_traffic_label"]).mean()
-        print(f"         Accuracy vs labels   : {accuracy:.1%}")
-        for cls in ["Human", "LLM_Scraper", "Ad_Fraud"]:
-            subset  = df[df["raw_traffic_label"] == cls]
-            cls_acc = (subset["vertex_ai_classification"] == cls).mean()
-            print(f"           {cls:<15} precision : {cls_acc:.1%}  (n={len(subset)})")
-
+        print(f"         Accuracy: {accuracy:.1%}")
+        for cls in ["Human","LLM_Scraper","Ad_Fraud"]:
+            sub = df[df["raw_traffic_label"]==cls]
+            acc = (sub["vertex_ai_classification"]==cls).mean()
+            print(f"           {cls:<15}: {acc:.1%}  (n={len(sub)})")
     return df
 
-
-# ══════════════════════════════════════════════════════════════
-# STEP 4: EXPORT CLEANED DATA
-#
-# [MOCK]       Writes human-only rows to local CSV.
-# [PRODUCTION] Write to BigQuery then trigger downstream:
-#
-#   df_cleaned.to_gbq(
-#     destination_table=f"{GCP_PROJECT_ID}.{PROD_BQ_DATASET}.cleaned_events",
-#     project_id=GCP_PROJECT_ID, if_exists="replace"
-#   )
-#   → Trigger Google Ads offline conversion import (VBB)
-#   → Trigger Meridian MMM Vertex AI Pipeline
-# ══════════════════════════════════════════════════════════════
 
 CONV_VALUES = {
     "google / cpc"           : 150.00,
@@ -491,126 +268,437 @@ CONV_VALUES = {
     "bing / cpc"             :  90.00,
     "direct / (none)"        : 200.00,
     "programmatic / display" :  60.00,
-    "(direct) / (none)"      : 200.00,   # GA4 public dataset format
+    "(direct) / (none)"      : 200.00,
     "google / organic"       : 180.00,
 }
 
-def export_cleaned_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Filters to Human-classified rows, assigns conversion_value_usd,
-    and exports the cleaned payload for VBB upload and Meridian MMM.
-    """
-    print(f"\n[Step 4] Exporting cleaned human-only data payload...")
-    print("         [PRODUCTION] Would write to BigQuery → trigger Meridian pipeline.")
 
-    df_human = df[df["vertex_ai_classification"] == "Human"].copy()
-
-    df_human["conversion_value_usd"] = (
-        df_human["source_medium"].map(CONV_VALUES).fillna(100.00)
-    )
-
-    export_cols = [
-        "client_id", "event_timestamp", "source_medium",
-        "geo_country", "device_category", "landing_page",
-        "edge_score", "session_duration_sec",
-        "event_velocity_per_sec", "page_scroll_depth_pct",
-        "click_events", "scroll_events", "mouse_move_events",
-        "vertex_ai_classification", "conversion_value_usd",
-    ]
-
-    # Keep only columns that exist (real data may not have all mock columns)
-    export_cols = [c for c in export_cols if c in df_human.columns]
-    df_export   = df_human[export_cols].reset_index(drop=True)
-
+def export_cleaned_data(df):
+    """Filters to Human rows, assigns conversion_value_usd, exports CSV."""
+    print(f"\n[Step 4] Exporting cleaned data payload...")
+    df_human = df[df["vertex_ai_classification"]=="Human"].copy()
+    df_human["conversion_value_usd"] = df_human["source_medium"].map(CONV_VALUES).fillna(100.00)
+    export_cols = [c for c in [
+        "client_id","event_timestamp","source_medium","geo_country","device_category",
+        "landing_page","edge_score","session_duration_sec","event_velocity_per_sec",
+        "page_scroll_depth_pct","click_events","scroll_events","mouse_move_events",
+        "vertex_ai_classification","conversion_value_usd",
+    ] if c in df_human.columns]
+    df_export = df_human[export_cols].reset_index(drop=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     df_export.to_csv(CLEANED_CSV, index=False)
-
     total_raw     = len(df)
     total_cleaned = len(df_export)
     bots_removed  = total_raw - total_cleaned
     total_value   = df_export["conversion_value_usd"].sum()
     avg_value     = df_export["conversion_value_usd"].mean()
-
-    print(f"\n{'═'*58}")
-    print(f"  Pipeline Summary — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'═'*58}")
-    print(f"  Raw GA4 sessions         : {total_raw:>6,}")
-    print(f"  Human (cleaned signal)   : {total_cleaned:>6,}  ({total_cleaned/total_raw:.1%})")
-    print(f"  Bots / Scrapers removed  : {bots_removed:>6,}  ({bots_removed/total_raw:.1%})")
-    print(f"  {'─'*48}")
-    print(f"  Total Conversion Value   : ${total_value:>10,.2f}")
-    print(f"  Avg Conv Value / Session : ${avg_value:>10.2f}")
-    print(f"  {'─'*48}")
-    print(f"  Cleaned CSV              : {CLEANED_CSV}")
-    print(f"{'═'*58}")
-    print(f"\n  Downstream targets:")
-    print(f"    → Google Ads VBB  : upload {total_cleaned:,} conversions at avg ${avg_value:.2f}")
-    print(f"    → Meridian MMM    : {bots_removed:,} bot sessions removed from attribution model")
-    print(f"    → Looker Studio   : refreshed dataset ready for executive reporting")
-
-    # Source breakdown
-    if total_cleaned > 0:
-        print(f"\n  Conversion value by source:")
-        src_summary = df_export.groupby("source_medium")["conversion_value_usd"].agg(["count", "sum"])
-        for src, row in src_summary.iterrows():
-            print(f"    {src:<35} {int(row['count']):>5} sessions  ${row['sum']:>10,.2f}")
-
+    print(f"\n  {'='*50}")
+    print(f"  Pipeline Summary  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  {'='*50}")
+    print(f"  Raw sessions   : {total_raw:>6,}")
+    print(f"  Human (cleaned): {total_cleaned:>6,}  ({total_cleaned/total_raw:.1%})")
+    print(f"  Bots removed   : {bots_removed:>6,}  ({bots_removed/total_raw:.1%})")
+    print(f"  Total conv val : ${total_value:>10,.2f}")
+    print(f"  Avg conv val   : ${avg_value:>10.2f}")
+    print(f"  Spend saved    : ${bots_removed*2.40:>10.2f}  ({bots_removed} bots x $2.40 CPC)")
+    print(f"  Cleaned CSV    : {CLEANED_CSV}")
     return df_export
 
 
-# ══════════════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════════════
+# =========================================================
+# STEP 6: MERIDIAN MMM -- Channel Attribution
+# =========================================================
+# Maps GA4 source_medium values to clean display names.
+CHANNEL_DISPLAY_NAMES = {
+    "google / cpc":           "Google Ads",
+    "meta / paid_social":     "Meta Ads",
+    "bing / cpc":             "Bing Ads",
+    "programmatic / display": "Display",
+    "direct / (none)":        "Direct",
+    "(direct) / (none)":      "Direct",
+    "google / organic":       "Organic",
+    "google / organic search":"Organic",
+}
+
+# Paid channels included in MMM (excludes zero-spend channels)
+PAID_CHANNELS = ["Google Ads", "Meta Ads", "Bing Ads", "Display"]
+
+# Assumed target ROAS per channel (revenue per $1 spend).
+# Used to synthesize media spend from conversion values.
+# [SYNTHETIC] -- real ad spend is not in the GA4 BigQuery schema.
+CHANNEL_ROAS = {
+    "Google Ads": 4.0,
+    "Meta Ads":   3.2,
+    "Bing Ads":   3.5,
+    "Display":    2.5,
+}
+
+
+def _map_channel(source_medium):
+    """Maps GA4 source_medium string to a clean channel display name."""
+    s = str(source_medium).lower()
+    for key, name in CHANNEL_DISPLAY_NAMES.items():
+        if key in s:
+            return name
+    return "Other"
+
+
+def _compute_channel_attribution(df_raw, df_cleaned):
+    """Computes raw and calibrated channel contribution from session data.
+
+    Raw contribution = estimated KPI if all sessions were human
+                       (raw_sessions * avg_conv_value_per_channel)
+    Calibrated contribution = actual KPI from human-only cleaned sessions
+
+    Returns (channel_results_list, total_clean_kpi, total_raw_kpi_estimate)
+    """
+    dr = df_raw.copy()
+    dr["channel"] = dr["source_medium"].apply(_map_channel)
+    dc = df_cleaned.copy()
+    dc["channel"] = dc["source_medium"].apply(_map_channel)
+
+    # Calibrated KPI (real human conversion value)
+    clean_kpi = dc.groupby("channel")["conversion_value_usd"].sum().fillna(0.0)
+
+    # Session counts for bot inflation estimate
+    raw_sessions   = dr.groupby("channel").size()
+    clean_sessions = dc.groupby("channel").size()
+
+    # Avg conversion value per channel (from cleaned data)
+    avg_conv = dc.groupby("channel")["conversion_value_usd"].mean().fillna(100.0)
+
+    # Use intersection of PAID_CHANNELS and observed data
+    observed = set(raw_sessions.index) | set(clean_kpi.index)
+    channels = [c for c in PAID_CHANNELS if c in observed]
+    if not channels:
+        channels = PAID_CHANNELS
+
+    data = {}
+    for ch in channels:
+        r  = int(raw_sessions.get(ch, 0))
+        c  = int(clean_sessions.get(ch, 0))
+        ck = float(clean_kpi.get(ch, 0.0))
+        av = float(avg_conv.get(ch, 100.0))
+        data[ch] = {
+            "raw_sessions":   r,
+            "clean_sessions": c,
+            "clean_kpi":      ck,
+            "raw_kpi":        r * av,   # estimated -- assumes same avg_conv for bots
+        }
+
+    total_clean = sum(v["clean_kpi"] for v in data.values()) or 1.0
+    total_raw   = sum(v["raw_kpi"]   for v in data.values()) or 1.0
+
+    results = []
+    for ch, d in data.items():
+        raw_pct  = round(d["raw_kpi"]   / total_raw   * 100, 1)
+        cal_pct  = round(d["clean_kpi"] / total_clean * 100, 1)
+        bot_rate = 1.0 - (d["clean_sessions"] / max(d["raw_sessions"], 1))
+        bot_pct  = round(bot_rate * 100, 1)
+        roi      = CHANNEL_ROAS.get(ch, 3.0)
+
+        if bot_pct >= 40:
+            insight = "High bot inflation -- calibrated lift significantly below raw"
+        elif bot_pct >= 20:
+            insight = "Moderate bot inflation -- calibrated view recommended for bidding"
+        else:
+            insight = "Low bot contamination -- raw signal relatively reliable"
+
+        results.append({
+            "name":                        ch,
+            "raw_contribution_pct":        raw_pct,
+            "calibrated_contribution_pct": cal_pct,
+            "bot_inflation_pct":           bot_pct,
+            "roi":                         roi,
+            "insight":                     insight,
+        })
+
+    return results, total_clean, total_raw
+
+
+def _try_meridian(kpi_arr, media_arr, spend_total, channel_names, channel_results):
+    """Attempts to run real google-meridian Bayesian MMM.
+
+    Requires: pip install google-meridian
+    Minimum recommended: 26 weeks of data, GPU for practical run times.
+
+    Returns meridian version string on success, None on failure (falls back
+    to the simple attribution model in _compute_channel_attribution).
+    """
+    try:
+        import importlib.metadata
+        ver = importlib.metadata.version("google-meridian")
+    except Exception:
+        ver = "unknown"
+
+    try:
+        import xarray as xr
+        from meridian.data import input_data as data_lib
+        from meridian.model import model as model_lib
+
+        print(f"         google-meridian {ver} found -- building xarray InputData...")
+
+        n_geos, n_weeks, n_ch = media_arr.shape
+        from datetime import date, timedelta as td
+        today = date.today()
+        dates = [
+            (today - td(weeks=(n_weeks - 1 - w))).isoformat()
+            for w in range(n_weeks)
+        ]
+
+        kpi_da = xr.DataArray(
+            kpi_arr,
+            dims=["geo", "time"],
+            coords={"geo": ["national"], "time": dates},
+            name="kpi",
+        )
+        pop_da = xr.DataArray(
+            np.array([1.0]),
+            dims=["geo"],
+            coords={"geo": ["national"]},
+            name="population",
+        )
+        media_da = xr.DataArray(
+            media_arr,
+            dims=["geo", "media_time", "media_channel"],
+            coords={
+                "geo":           ["national"],
+                "media_time":    dates,
+                "media_channel": channel_names,
+            },
+            name="media",
+        )
+        spend_da = xr.DataArray(
+            spend_total,
+            dims=["media_channel"],
+            coords={"media_channel": channel_names},
+            name="media_spend",
+        )
+
+        input_data = data_lib.InputData(
+            kpi=kpi_da,
+            kpi_type="revenue",
+            population=pop_da,
+            media=media_da,
+            media_spend=spend_da,
+        )
+
+        print("         Fitting Bayesian NUTS-MCMC (n_chains=1, n_samples=500)...")
+        print("         Note: GPU recommended. CPU run may take several minutes.")
+
+        mmm = model_lib.Meridian(input_data=input_data)
+        mmm.sample_posterior(
+            n_chains=1,
+            n_adapt=200,
+            n_burnin=0,
+            n_samples=500,
+            seed=RANDOM_SEED,
+        )
+
+        # Extract posterior ROI estimates
+        try:
+            from meridian.analysis import analyzer as az_lib
+            ana      = az_lib.Analyzer(mmm)
+            roi_vals = ana.roi().mean(dim=["chain", "draw"]).values
+            for i, ch_r in enumerate(channel_results):
+                if i < len(roi_vals):
+                    ch_r["roi"]          = round(float(roi_vals[i]), 2)
+                    ch_r["meridian_roi"] = True
+            print(f"         Posterior ROI: {[round(float(v),2) for v in roi_vals]}")
+        except Exception as ex:
+            print(f"         ROI extraction skipped ({ex}) -- using ROAS priors")
+
+        print(f"         Meridian MCMC complete (google-meridian v{ver})")
+        return ver
+
+    except ImportError as e:
+        print(f"         google-meridian not installed: {e}")
+        print("         Install: pip install google-meridian")
+        print("         Falling back to channel attribution model.")
+        return None
+    except Exception as e:
+        print(f"         Meridian error: {e}")
+        print("         Falling back to channel attribution model.")
+        return None
+
+
+def run_meridian_mmm(df_raw, df_cleaned):
+    """Step 6: Bayesian MMM via google-meridian (attribution fallback if not installed).
+
+    Computes channel lift before and after bot removal.
+    Media spend is synthesized from conversion values + ROAS assumptions [SYNTHETIC]
+    because real ad account spend data is not part of the GA4 BigQuery schema.
+
+    Writes results under the 'meridian' key in docs/data/summary.json.
+    """
+    print(f"\n[Step 6] Running Meridian MMM on {len(df_cleaned):,} cleaned sessions...")
+    print("         Computing channel attribution (raw vs calibrated)...")
+
+    channel_results, total_clean, total_raw = _compute_channel_attribution(df_raw, df_cleaned)
+    channel_names = [c["name"] for c in channel_results]
+    n_channels    = len(channel_names)
+
+    print(f"         Paid channels : {channel_names}")
+    print(f"         Clean KPI     : ${total_clean:,.2f}")
+    print(f"         Raw KPI est.  : ${total_raw:,.2f}")
+    print("         Synthesizing 52-week media time series [SYNTHETIC media spend]...")
+
+    # Build synthetic 52-week panel data for Meridian.
+    # Channel shares are grounded in real cleaned KPI proportions.
+    # Media spend is derived via assumed ROAS (labelled SYNTHETIC).
+    n_weeks = 52
+    np.random.seed(RANDOM_SEED)
+
+    shares = [c["calibrated_contribution_pct"] / 100.0 for c in channel_results]
+    s_sum  = sum(shares) or 1.0
+    shares = [s / s_sum for s in shares]
+
+    kpi_arr   = np.zeros((1, n_weeks))
+    media_arr = np.zeros((1, n_weeks, n_channels))
+
+    for w in range(n_weeks):
+        # Modest e-commerce holiday uplift in weeks 44-52 (Nov-Dec)
+        season = 1.0 + 0.5 * np.exp(-((w - 49.0) ** 2) / 15.0) if w > 42 else 1.0
+        noise  = max(0.5, np.random.normal(1.0, 0.10))
+        wk_kpi = (total_clean / n_weeks) * season * noise
+        kpi_arr[0, w] = wk_kpi
+        for ci, ch_r in enumerate(channel_results):
+            roas   = CHANNEL_ROAS.get(ch_r["name"], 3.0)
+            ch_kpi = wk_kpi * shares[ci]
+            media_arr[0, w, ci] = max(
+                0.0, (ch_kpi / roas) * np.random.normal(1.0, 0.05)
+            )
+
+    spend_total = np.array([
+        total_clean * shares[ci] / CHANNEL_ROAS.get(channel_results[ci]["name"], 3.0)
+        for ci in range(n_channels)
+    ])
+
+    meridian_ver = _try_meridian(
+        kpi_arr, media_arr, spend_total, channel_names, channel_results
+    )
+
+    if meridian_ver:
+        model_label = f"google-meridian v{meridian_ver} (Bayesian NUTS-MCMC)"
+        status      = "fitted"
+    else:
+        model_label = (
+            "Attribution model (numpy) -- install google-meridian for Bayesian MMM"
+        )
+        status = "fallback"
+
+    print(f"\n  Meridian Step 6 Results ({status}):")
+    header = f"  {'Channel':<16} {'Raw':>8} {'Calibrated':>12} {'Bot Infl':>10} {'ROI':>6}"
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+    for ch_r in channel_results:
+        print(
+            f"  {ch_r['name']:<16}"
+            f" {ch_r['raw_contribution_pct']:>7.1f}%"
+            f" {ch_r['calibrated_contribution_pct']:>11.1f}%"
+            f" {ch_r['bot_inflation_pct']:>9.1f}%"
+            f" {ch_r['roi']:>5.1f}x"
+        )
+
+    return {
+        "status":             status,
+        "model":              model_label,
+        "n_weeks_data":       n_weeks,
+        "media_spend_source": (
+            "SYNTHETIC -- derived from channel KPI proportions and ROAS assumptions. "
+            "Real ad spend is not part of the GA4 BigQuery schema."
+        ),
+        "channels":           channel_results,
+        "total_clean_value":  round(total_clean, 2),
+        "total_raw_value":    round(total_raw, 2),
+    }
+
+
+def export_summary_json(df_raw, df_cleaned, mode, meridian_results=None):
+    """Writes docs/data/summary.json for the live GitHub Pages dashboard.
+    Commit this file after each run to push real data to the live site."""
+    print(f"\n[Step 5] Exporting summary JSON for live dashboard...")
+    df_raw_copy = df_raw.copy()
+    df_raw_copy["_date"] = pd.to_datetime(df_raw_copy["event_timestamp"]).dt.date
+    daily_raw = df_raw_copy.groupby("_date").size().reset_index(name="raw")
+    df_cln    = df_cleaned.copy()
+    df_cln["_date"] = pd.to_datetime(df_cln["event_timestamp"]).dt.date
+    daily_cln = df_cln.groupby("_date").size().reset_index(name="cleaned")
+    daily = daily_raw.merge(daily_cln, on="_date", how="left").fillna(0).tail(7).reset_index(drop=True)
+    total_raw     = len(df_raw)
+    total_cleaned = len(df_cleaned)
+    bots_removed  = total_raw - total_cleaned
+    summary = {
+        "generated_at"  : datetime.now().isoformat(),
+        "pipeline_mode" : mode,
+        "data_source"   : (
+            "bigquery-public-data.ga4_obfuscated_sample_ecommerce (Google Merchandise Store, Nov 2020 to Jan 2021)"
+            if mode == "bigquery" else
+            "Synthetic mock data -- run: python scripts/bq_vertex_pipeline.py to refresh"
+        ),
+        "sessions": {
+            "total_raw"        : total_raw,
+            "total_cleaned"    : total_cleaned,
+            "bots_removed"     : bots_removed,
+            "bots_removed_pct" : round(bots_removed / total_raw * 100, 1),
+            "human_pct"        : round(total_cleaned / total_raw * 100, 1),
+        },
+        "daily": {
+            "labels"  : [d.strftime("%a %d %b") for d in daily["_date"]],
+            "raw"     : daily["raw"].astype(int).tolist(),
+            "cleaned" : daily["cleaned"].astype(int).tolist(),
+        },
+        "vbb": {
+            "human_sessions"        : total_cleaned,
+            "bot_sessions"          : bots_removed,
+            "total_conv_value"      : round(float(df_cleaned["conversion_value_usd"].sum()), 2),
+            "avg_conv_value"        : round(float(df_cleaned["conversion_value_usd"].mean()), 2),
+            "estimated_spend_saved" : round(bots_removed * 2.40, 2),
+        },
+    }
+    if meridian_results is not None:
+        summary["meridian"] = meridian_results
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root  = os.path.dirname(script_dir)
+    out_dir    = os.path.join(repo_root, "docs", "data")
+    out_path   = os.path.join(out_dir, "summary.json")
+    os.makedirs(out_dir, exist_ok=True)
+    with open(out_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"         Written to: {out_path}")
+    print(f"         Commit docs/data/summary.json to update the live dashboard.")
+    return summary
+
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="GA4 Enterprise Agent Architecture — BigQuery & Vertex AI Pipeline"
-    )
-    parser.add_argument(
-        "--mock", action="store_true",
-        help="Run in offline mock mode (no GCP credentials required)"
-    )
-    parser.add_argument(
-        "--sessions", type=int, default=N_SESSIONS,
-        help=f"Number of sessions to fetch/generate (default: {N_SESSIONS})"
-    )
+    parser = argparse.ArgumentParser(description="GA4 Enterprise Agent Architecture Pipeline")
+    parser.add_argument("--mock", action="store_true", help="Offline mock mode (no GCP needed)")
+    parser.add_argument("--sessions", type=int, default=N_SESSIONS)
     args = parser.parse_args()
-
-    use_mock = args.mock or os.getenv("PIPELINE_MODE", "").lower() == "mock"
-
-    print("═" * 58)
-    print("  GA4 Enterprise Agent Architecture")
-    print("  BigQuery & Vertex AI Pipeline")
-    mode_str = "MOCK (offline)" if use_mock else "BIGQUERY (real GA4 public dataset)"
-    print(f"  Mode    : {mode_str}")
-    if not use_mock:
-        print(f"  Project : {GCP_PROJECT_ID}")
-        print(f"  Dataset : {BQ_PUBLIC_DATASET}")
-    print("═" * 58)
-
+    use_mock = args.mock or os.getenv("PIPELINE_MODE","").lower() == "mock"
+    mode     = "mock" if use_mock else "bigquery"
+    print("="*58)
+    print("  GA4 Enterprise Agent Architecture -- Pipeline")
+    print(f"  Mode: {'MOCK (offline)' if use_mock else 'BIGQUERY (real GA4 public dataset)'}")
+    print("="*58)
     if use_mock:
-        # ── Offline / mock mode ──────────────────────────────────────
         df_raw = generate_mock_ga4_data(args.sessions)
         df_raw = enrich_with_edge_signals(df_raw, is_real_data=False)
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
         df_raw.to_csv(RAW_CSV, index=False)
-        print(f"         Saved to : {RAW_CSV}")
-
         df_classified = vertex_ai_clustering(df_raw, has_ground_truth=True)
         df_cleaned    = export_cleaned_data(df_classified)
-
     else:
-        # ── BigQuery mode — real GA4 public data ────────────────────
         df_raw = fetch_ga4_public_data(args.sessions)
         df_raw = enrich_with_edge_signals(df_raw, is_real_data=True)
-
-        # No ground-truth labels in real data — skip accuracy metrics
         df_raw["raw_traffic_label"] = "UNKNOWN (real data)"
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
         df_raw.to_csv(RAW_CSV, index=False)
-        print(f"         Saved raw sessions to : {RAW_CSV}")
-
         df_classified = vertex_ai_clustering(df_raw, has_ground_truth=False)
         df_cleaned    = export_cleaned_data(df_classified)
-
+    meridian_results = run_meridian_mmm(df_raw, df_cleaned)
+    export_summary_json(df_raw, df_cleaned, mode, meridian_results=meridian_results)
     print("\n  [DONE] Pipeline complete.\n")
 
 

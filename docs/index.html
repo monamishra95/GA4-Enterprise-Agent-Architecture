@@ -88,11 +88,11 @@
   <!-- ═══════════════════════════════════════════════════════
        DATA SOURCE BANNER
   ═══════════════════════════════════════════════════════ -->
-  <div class="mb-6 rounded-xl px-5 py-3 flex flex-wrap items-center gap-3 fade-up"
+  <div id="data-banner" class="mb-6 rounded-xl px-5 py-3 flex flex-wrap items-center gap-3 fade-up"
        style="background:rgba(245,158,11,.07); border:1px solid rgba(245,158,11,.25); animation-delay:.05s">
-    <span class="text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded"
+    <span id="banner-badge" class="text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded"
           style="background:rgba(245,158,11,.2); color:#fbbf24; letter-spacing:.12em;">⚠ SIMULATED DATA</span>
-    <span class="text-[11px] text-slate-400">
+    <span id="banner-text" class="text-[11px] text-slate-400">
       No GA4 API, BigQuery, Vertex AI, or Meridian connection exists in this demo.
       All metrics are generated client-side via <code class="text-amber-300">Math.random()</code> and hardcoded constants
       to illustrate how a production pipeline would behave.
@@ -472,26 +472,110 @@
 
     // ─────────────────────────────────────────────────────
     // SECTION 1: VERTEX AI CLEANING CHART
+    // Attempts to load real pipeline data from docs/data/summary.json.
+    // Falls back to hardcoded simulated values if the file is absent.
     // ─────────────────────────────────────────────────────
 
-    const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const rawSessions     = [12440, 14210, 13880, 15620, 16080, 11190, 13540];
-    const cleanedSessions = rawSessions.map(v => Math.round(v * randFloat(0.60, 0.68)));
+    // Fallback hardcoded values (simulated)
+    const FALLBACK_DAYS    = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const FALLBACK_RAW     = [12440, 14210, 13880, 15620, 16080, 11190, 13540];
+    const FALLBACK_CLEANED = FALLBACK_RAW.map(v => Math.round(v * randFloat(0.60, 0.68)));
 
-    const totalRaw     = rawSessions.reduce((a, b) => a + b, 0);
-    const totalCleaned = cleanedSessions.reduce((a, b) => a + b, 0);
-    const botsRemovedPct = (((totalRaw - totalCleaned) / totalRaw) * 100).toFixed(1);
+    async function initCleaningChart() {
+      let DAYS = FALLBACK_DAYS;
+      let rawSessions     = FALLBACK_RAW;
+      let cleanedSessions = FALLBACK_CLEANED;
+      let isRealData      = false;
+      let summary         = null;
 
-    $('m-raw').textContent     = totalRaw.toLocaleString();
-    $('m-cleaned').textContent = totalCleaned.toLocaleString();
-    $('m-bots').textContent    = botsRemovedPct + '%';
+      try {
+        const resp = await fetch('data/summary.json');
+        if (resp.ok) {
+          summary      = await resp.json();
+          DAYS         = summary.daily.labels;
+          rawSessions     = summary.daily.raw;
+          cleanedSessions = summary.daily.cleaned;
+          isRealData   = true;
+        }
+      } catch (_) {}
+
+      // Update data source banner
+      if (isRealData && summary) {
+        const badge = $('banner-badge');
+        const text  = $('banner-text');
+        const banner = $('data-banner');
+        banner.style.background = 'rgba(16,185,129,.07)';
+        banner.style.border     = '1px solid rgba(16,185,129,.25)';
+        badge.style.background  = 'rgba(16,185,129,.2)';
+        badge.style.color       = '#34d399';
+        badge.textContent       = '✓ PIPELINE DATA';
+        text.innerHTML = `
+          <strong style="color:#34d399;">Data source:</strong>
+          <span style="color:#94a3b8;">${summary.data_source}</span>
+          &nbsp;&middot;&nbsp;
+          <span style="color:#475569;">Generated: ${new Date(summary.generated_at).toLocaleString()}</span>
+        `;
+      }
+
+      // Populate metric chips
+      const totalRaw     = rawSessions.reduce((a, b) => a + b, 0);
+      const totalCleaned = cleanedSessions.reduce((a, b) => a + b, 0);
+      const botsRemovedPct = isRealData && summary
+        ? summary.sessions.bots_removed_pct.toFixed(1)
+        : (((totalRaw - totalCleaned) / totalRaw) * 100).toFixed(1);
+
+      $('m-raw').textContent     = totalRaw.toLocaleString();
+      $('m-cleaned').textContent = totalCleaned.toLocaleString();
+      $('m-bots').textContent    = botsRemovedPct + '%';
+
+      // Populate VBB summary chips from real pipeline data if available
+      if (isRealData && summary) {
+        const s = summary.sessions;
+        // Pre-seed the counters so they reflect real pipeline totals
+        vTotal = s.total_raw;
+        vHuman = s.total_cleaned;
+        vBot   = s.bots_removed;
+        vSaved = summary.vbb.estimated_spend_saved;
+        $('v-total').textContent = vTotal.toLocaleString();
+        $('v-human').textContent = vHuman.toLocaleString();
+        $('v-bot').textContent   = vBot.toLocaleString();
+        $('v-saved').textContent = '$' + vSaved.toFixed(2);
+        logToFeed(
+          `PIPELINE  |  Loaded summary.json  |  ${s.total_raw.toLocaleString()} raw sessions  |  ` +
+          `${s.bots_removed_pct}% bots removed  |  Source: ${summary.pipeline_mode.toUpperCase()}`,
+          '#34d399'
+        );
+      }
+
+      // Update Meridian chart with real pipeline attribution data
+      if (isRealData && summary && summary.meridian && summary.meridian.channels) {
+        const ch = summary.meridian.channels;
+        CHANNELS = ch.map(c => c.name);
+        RAW_LIFT = ch.map(c => c.raw_contribution_pct);
+        CAL_LIFT = ch.map(c => c.calibrated_contribution_pct);
+        // meridianChart is created synchronously below this async block,
+        // so by the time this await-resumed code runs it already exists.
+        if (typeof meridianChart !== 'undefined') {
+          meridianChart.data.labels                  = CHANNELS;
+          meridianChart.data.datasets[0].data        = [...RAW_LIFT];
+          meridianChart.options.scales.y.max         = Math.ceil(Math.max(...RAW_LIFT) / 10) * 10 + 10;
+          meridianChart.update();
+        }
+        const mStatus = summary.meridian.status === 'fitted'
+          ? '<span style="color:#34d399;">PIPELINE DATA (Meridian fitted)</span>'
+          : '<span style="color:#f59e0b;">PIPELINE DATA (attribution model)</span>';
+        logToFeed(
+          `MERIDIAN  |  Loaded channel attribution  |  Model: ${summary.meridian.status}  |  ` +
+          `Channels: ${CHANNELS.join(', ')}`,
+          '#818cf8'
+        );
+      }
 
     new Chart($('cleaningChart').getContext('2d'), {
       type: 'line',
       data: {
         labels: DAYS,
-        datasets: [
-          {
+        datasets: [{
             label: 'Raw GA4 Traffic',
             data: rawSessions,
             borderColor: '#6366f1',
@@ -522,6 +606,9 @@
         }
       }
     });
+
+    } // end initCleaningChart
+    initCleaningChart();
 
 
     // ─────────────────────────────────────────────────────
@@ -592,9 +679,11 @@
     // SECTION 3: MERIDIAN MMM TOGGLE CHART
     // ─────────────────────────────────────────────────────
 
-    const CHANNELS = ['Meta Ads', 'Google Ads', 'TikTok Ads', 'YouTube'];
-    const RAW_LIFT  = [45, 38, 28, 33];   // Bot-inflated
-    const CAL_LIFT  = [17, 36, 11, 30];   // Meridian human-only
+    // Default fallback data — overwritten by initCleaningChart() if summary.json
+    // contains real Meridian attribution results from the pipeline.
+    let CHANNELS = ['Meta Ads', 'Google Ads', 'Bing Ads', 'Display'];
+    let RAW_LIFT  = [45, 38, 28, 33];   // Bot-inflated (fallback demo)
+    let CAL_LIFT  = [17, 36, 11, 30];   // Calibrated human-only (fallback demo)
     const BAR_COLORS = [
       { bg: 'rgba(99,102,241,.75)', bd: '#6366f1' },
       { bg: 'rgba(16,185,129,.75)', bd: '#10b981' },
@@ -652,14 +741,26 @@
         lblRaw.style.color    = '#475569';
         lblCal.style.color    = '#818cf8';
         meridianChart.data.datasets[0].data = [...CAL_LIFT];
+        // Build dynamic insight: find biggest drop and biggest gain
+        const drops = CHANNELS.map((ch, i) => ({ ch, delta: RAW_LIFT[i] - CAL_LIFT[i] }))
+                               .sort((a, b) => b.delta - a.delta);
+        const biggest = drops[0];
+        const gains   = drops.filter(d => d.delta < 0).sort((a, b) => a.delta - b.delta);
+        const topGain = gains.length ? gains[0] : null;
+        let calMsg = `After removing bot-inflated conversions, <strong>${biggest.ch}</strong> lift drops
+          ${biggest.delta.toFixed(1)} pts (${RAW_LIFT[CHANNELS.indexOf(biggest.ch)]}% &rarr; ${CAL_LIFT[CHANNELS.indexOf(biggest.ch)]}%).`;
+        if (topGain) {
+          calMsg += ` <strong>${topGain.ch}</strong> gains relatively, confirming stronger true incrementality.`;
+        }
         insight.innerHTML = `
           <strong style="color:#34d399;">Calibrated View (Meridian):</strong>
-          <span class="text-slate-400">
-            After removing bot-inflated conversions, Meta Ads lift drops 62% (45% → 17%).
-            Google Ads holds steady at 36%, confirming true incrementality.
-            <strong style="color:#fbbf24;">Recommendation: reallocate ~30% of Meta budget to Google Ads.</strong>
+          <span class="text-slate-400"> ${calMsg}
+            <strong style="color:#fbbf24;"> Budget recommendation: shift spend toward channels with lowest bot inflation.</strong>
           </span>`;
-        logToFeed('MERIDIAN  →  Switched to CALIBRATED view  |  Meta lift: 45% → 17%  |  Google: 38% → 36%', '#f59e0b');
+        logToFeed(
+          `MERIDIAN  ->  CALIBRATED view  |  ${biggest.ch}: ${RAW_LIFT[CHANNELS.indexOf(biggest.ch)]}% -> ${CAL_LIFT[CHANNELS.indexOf(biggest.ch)]}%`,
+          '#f59e0b'
+        );
       } else {
         knob.style.transform = 'translateX(0px)';
         btn.style.background  = '#334155';
@@ -669,11 +770,11 @@
         insight.innerHTML = `
           <strong style="color:#818cf8;">Raw View:</strong>
           <span class="text-slate-400">
-            Meta Ads lift is overstated — LLM scrapers and ad fraud bots are triggering
-            conversion pixels, inflating measured ROAS. Toggle to Calibrated to see Meridian's
-            human-only incrementality estimates.
+            Channel lift is overstated -- LLM scrapers and ad fraud bots trigger
+            conversion pixels, inflating measured ROAS. Toggle to Calibrated to see
+            Meridian human-only incrementality estimates.
           </span>`;
-        logToFeed('MERIDIAN  →  Switched to RAW view  |  Bot-inflated signals active', '#94a3b8');
+        logToFeed('MERIDIAN  ->  RAW view  |  Bot-inflated signals active', '#94a3b8');
       }
       meridianChart.update();
     }

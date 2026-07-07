@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-07T16:52:35.717832",
+  "generated_at": "2026-07-07T17:25:08.280928",
   "pipeline_mode": "mock",
   "data_source": "Synthetic mock data -- run: python scripts/bq_vertex_pipeline.py to refresh",
   "sessions": {
@@ -26,5 +26,47 @@
     "total_conv_value": 67820.0,
     "avg_conv_value": 124.9,
     "estimated_spend_saved": 1096.8
+  },
+  "meridian": {
+    "status": "fallback",
+    "model": "Attribution model (numpy) -- install google-meridian for Bayesian MMM",
+    "n_weeks_data": 52,
+    "media_spend_source": "SYNTHETIC -- derived from channel KPI proportions and ROAS assumptions. Real ad spend is not part of the GA4 BigQuery schema.",
+    "channels": [
+      {
+        "name": "Google Ads",
+        "raw_contribution_pct": 37.2,
+        "calibrated_contribution_pct": 35.7,
+        "bot_inflation_pct": 48.3,
+        "roi": 4.0,
+        "insight": "High bot inflation -- calibrated lift significantly below raw"
+      },
+      {
+        "name": "Meta Ads",
+        "raw_contribution_pct": 28.5,
+        "calibrated_contribution_pct": 29.3,
+        "bot_inflation_pct": 44.5,
+        "roi": 3.2,
+        "insight": "High bot inflation -- calibrated lift significantly below raw"
+      },
+      {
+        "name": "Bing Ads",
+        "raw_contribution_pct": 20.3,
+        "calibrated_contribution_pct": 21.0,
+        "bot_inflation_pct": 44.2,
+        "roi": 3.5,
+        "insight": "High bot inflation -- calibrated lift significantly below raw"
+      },
+      {
+        "name": "Display",
+        "raw_contribution_pct": 14.0,
+        "calibrated_contribution_pct": 14.0,
+        "bot_inflation_pct": 45.9,
+        "roi": 2.5,
+        "insight": "High bot inflation -- calibrated lift significantly below raw"
+      }
+    ],
+    "total_clean_value": 45420.0,
+    "total_raw_value": 84210.0
   }
 }
