@@ -180,15 +180,33 @@ The dashboard will:
 
 ### 2. BigQuery / Vertex AI Pipeline
 
+The pipeline supports two modes:
+
+**BigQuery mode** (default) — queries the publicly available GA4 Obfuscated Sample Ecommerce dataset (`bigquery-public-data.ga4_obfuscated_sample_ecommerce`). Real session data from the Google Merchandise Store, Nov 2020 – Jan 2021. First 1 TB/month is free under the GCP free tier.
+
+**Mock mode** (`--mock`) — generates synthetic data with no GCP credentials required.
+
 ```bash
 # Install dependencies
-pip install pandas numpy scikit-learn
+pip install pandas numpy google-cloud-bigquery db-dtypes
 
-# Run the pipeline
+# One-time GCP setup (BigQuery mode only)
+# 1. Create a free GCP project at https://console.cloud.google.com
+# 2. Set your project ID at the top of bq_vertex_pipeline.py, or:
+export GCP_PROJECT_ID=your-gcp-project-id
+# 3. Authenticate
+gcloud auth application-default login
+
+# Run with real GA4 public data (BigQuery mode)
 python scripts/bq_vertex_pipeline.py
+
+# Run offline with synthetic data (no GCP needed)
+python scripts/bq_vertex_pipeline.py --mock
 ```
 
 Output: `data/raw_ga4_events.csv` and `data/cleaned_ga4_events.csv`
+
+> **Note:** `edge_score` (Cloud Armor) and `mouse_move_events` (client-side JS) are not part of the GA4 BigQuery schema — they are simulated from real session signals in both modes and labelled `SIMULATED` in the CSV output.
 
 ### 3. Playwright Traffic Spawner
 
@@ -210,13 +228,13 @@ A Chromium window will open and run 50 sessions visibly — alternating between 
 
 ## Production Deployment Notes
 
-| Component | Mock (This Repo) | Production Replacement |
+| Component | This Repo | Production Replacement |
 |---|---|---|
-| Edge Scoring | `Math.random()` in JS | Cloud Armor + reCAPTCHA Enterprise API |
-| GA4 Data Source | Synthetic CSV | BigQuery GA4 raw export (`events_*`) |
-| ML Classification | Rule-based Python | Vertex AI endpoint (`endpoint.predict()`) |
+| Edge Scoring | `Math.random()` in JS dashboard | Cloud Armor + reCAPTCHA Enterprise API |
+| GA4 Data Source | **Real** — `bigquery-public-data.ga4_obfuscated_sample_ecommerce` (or `--mock` for synthetic) | Your GA4 BigQuery export (`events_*`) |
+| ML Classification | Rule-based Python (mirrors Isolation Forest logic) | Vertex AI endpoint (`endpoint.predict()`) |
 | Conversion Upload | Console log | Google Ads Enhanced Conversions API |
-| MMM Input | CSV file | Meridian via Vertex AI Pipelines |
+| MMM Input | Cleaned CSV (human-only sessions) | Meridian via Vertex AI Pipelines |
 | Scheduler | Manual script run | Cloud Scheduler + Cloud Run |
 
 No real GCP credentials, GA4 Measurement IDs, or API keys are used anywhere in this repository. All placeholders follow the `YOUR_GCP_PROJECT_ID` convention.

@@ -1,209 +1,411 @@
 """
-GA4 Enterprise Agent Architecture — BigQuery & Vertex AI Pipeline Simulator
-============================================================================
-Simulates the full backend data pipeline that runs in production on GCP:
+GA4 Enterprise Agent Architecture — BigQuery & Vertex AI Pipeline
+=================================================================
+Queries the publicly available GA4 Obfuscated Sample Ecommerce dataset on
+Google BigQuery, then runs bot classification and exports the cleaned signal.
 
-  Step 1: Generate 1,000 mock GA4 raw event rows → data/raw_ga4_events.csv
-  Step 2: vertex_ai_clustering() — classify each row as Human / LLM_Scraper / Ad_Fraud
-  Step 3: Export cleaned (human-only) data → data/cleaned_ga4_events.csv
-           (this CSV simulates the payload sent to Meridian MMM and Google Ads VBB)
+  Dataset : bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*
+            Google Merchandise Store · Nov 2020 – Jan 2021 · privacy-obfuscated
+            Free to query: first 1 TB/month at no cost under GCP free tier.
 
-Each section is clearly marked [MOCK] vs [PRODUCTION] so you know exactly
-where real GCP API calls replace the simulation logic.
+  Pipeline:
+    Step 1  fetch_ga4_public_data()   — real session-level rows from BigQuery
+    Step 2  enrich_with_edge_signals() — simulate Cloud Armor edge score (not in GA4)
+    Step 3  vertex_ai_clustering()    — classify Human / LLM_Scraper / Ad_Fraud
+    Step 4  export_cleaned_data()     — human-only CSV → VBB + Meridian MMM payload
 
-Dependencies: pip install pandas numpy scikit-learn
-Run with:     python scripts/bq_vertex_pipeline.py
+  Modes:
+    bigquery  (default)  queries real GA4 data — requires GCP project + credentials
+    mock      (--mock)   generates synthetic data — no GCP needed, works offline
+
+  Run:
+    python scripts/bq_vertex_pipeline.py                   # BigQuery mode
+    python scripts/bq_vertex_pipeline.py --mock            # Offline / no-GCP mode
+    PIPELINE_MODE=mock python scripts/bq_vertex_pipeline.py
+
+  GCP Setup (one-time, takes ~5 minutes):
+    1. Create a free GCP project → https://console.cloud.google.com
+    2. Run: gcloud auth application-default login
+    3. Set GCP_PROJECT_ID below (or export GCP_PROJECT_ID=your-project-id)
+    4. pip install google-cloud-bigquery db-dtypes pandas numpy
+
+  Note on edge_score and mouse_move_events:
+    These signals come from Cloud Armor / reCAPTCHA Enterprise and client-side
+    JS, respectively — neither is exported to the GA4 BigQuery schema. In
+    BigQuery mode they are simulated from real session features (duration,
+    device, source) and are clearly labelled SIMULATED in the output.
 """
 
+import argparse
 import os
 import random
 import string
+import sys
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 
 # ─────────────────────────────────────────────────────────────
-# CONFIG  — Replace ALL caps values in production
+# CONFIG
 # ─────────────────────────────────────────────────────────────
 
-GCP_PROJECT_ID       = "YOUR_GCP_PROJECT_ID"        # [PRODUCTION] e.g. "my-analytics-prod"
-BIGQUERY_DATASET     = "YOUR_BIGQUERY_DATASET"       # [PRODUCTION] e.g. "ga4_raw_events"
-BIGQUERY_TABLE       = "YOUR_BIGQUERY_TABLE"         # [PRODUCTION] e.g. "events_*"
-VERTEX_AI_ENDPOINT   = "YOUR_VERTEX_AI_ENDPOINT_ID"  # [PRODUCTION] Vertex AI model endpoint ID
-VERTEX_AI_REGION     = "us-central1"                 # [PRODUCTION] GCP region
+# [REQUIRED for BigQuery mode] Your GCP project ID (billing must be enabled,
+# but the first 1 TB/month queried is free under the GCP free tier).
+# Override at runtime: export GCP_PROJECT_ID=my-gcp-project
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "YOUR_GCP_PROJECT_ID")
 
-OUTPUT_DIR       = "data"
-RAW_CSV          = os.path.join(OUTPUT_DIR, "raw_ga4_events.csv")
-CLEANED_CSV      = os.path.join(OUTPUT_DIR, "cleaned_ga4_events.csv")
+# Public dataset — no changes needed
+BQ_PUBLIC_DATASET = "bigquery-public-data.ga4_obfuscated_sample_ecommerce"
+BQ_DATE_START     = "20201101"   # Nov 2020
+BQ_DATE_END       = "20210131"   # Jan 2021
 
-N_ROWS      = 1000
+# [PRODUCTION] Your own GA4 BigQuery export — replace the public dataset above
+# with these when pointing at a real property:
+PROD_PROJECT_ID    = "YOUR_GCP_PROJECT_ID"
+PROD_BQ_DATASET    = "YOUR_BIGQUERY_DATASET"   # e.g. "analytics_123456789"
+PROD_BQ_TABLE      = "events_*"
+
+# [PRODUCTION] Vertex AI endpoint (replace rule-based classifier in Step 3)
+VERTEX_AI_ENDPOINT = "YOUR_VERTEX_AI_ENDPOINT_ID"
+VERTEX_AI_REGION   = "us-central1"
+
+OUTPUT_DIR  = "data"
+RAW_CSV     = os.path.join(OUTPUT_DIR, "raw_ga4_events.csv")
+CLEANED_CSV = os.path.join(OUTPUT_DIR, "cleaned_ga4_events.csv")
+
+N_SESSIONS  = 1000
 RANDOM_SEED = 42
-
 np.random.seed(RANDOM_SEED)
 random.seed(RANDOM_SEED)
 
 
 # ══════════════════════════════════════════════════════════════
-# STEP 1: GENERATE MOCK GA4 RAW EVENT DATA
+# STEP 1A: FETCH REAL GA4 DATA FROM BIGQUERY (BigQuery mode)
 #
-# [MOCK]       Uses numpy/random to synthesize realistic GA4 rows.
-# [PRODUCTION] Replace the body of generate_mock_ga4_data() with:
+# Queries the public GA4 Obfuscated Sample Ecommerce dataset.
+# Aggregates event-level rows into one row per session with
+# behavioral features directly derivable from the GA4 schema:
+#   session_duration_sec  — real (from MIN/MAX event_timestamp)
+#   event_velocity_per_sec — real (total_events / session_duration)
+#   click_events          — real (COUNTIF event_name = 'click')
+#   page_scroll_depth_pct — real (max percent_scrolled param)
+#   source_medium         — real (traffic_source.source / medium)
+#   geo_country           — real (geo.country)
 #
-#   from google.cloud import bigquery
-#   client = bigquery.Client(project=GCP_PROJECT_ID)
-#   query  = f"""
-#     SELECT
-#       event_timestamp,
-#       user_pseudo_id          AS client_id,
-#       geo.country             AS geo_country,
-#       traffic_source.source   AS source,
-#       traffic_source.medium   AS medium,
-#       device.web_info.browser AS browser,
-#       (SELECT value.string_value FROM UNNEST(event_params)
-#        WHERE key = 'page_location') AS page_location
-#     FROM `{GCP_PROJECT_ID}.{BIGQUERY_DATASET}.{BIGQUERY_TABLE}`
-#     WHERE _TABLE_SUFFIX BETWEEN '20250101' AND '20250107'
-#       AND event_name = 'page_view'
-#     LIMIT {N_ROWS}
-#   """
-#   df = client.query(query).to_dataframe()
+# [PRODUCTION] Swap BQ_PUBLIC_DATASET for your own GA4 export:
+#   `{PROD_PROJECT_ID}.{PROD_BQ_DATASET}.{PROD_BQ_TABLE}`
+# ══════════════════════════════════════════════════════════════
+
+GA4_SESSION_QUERY = """
+WITH sessions AS (
+  SELECT
+    user_pseudo_id                                                    AS client_id,
+    (SELECT value.int_value  FROM UNNEST(event_params) WHERE key = 'ga_session_id')
+                                                                      AS session_id,
+    MIN(event_timestamp)                                              AS session_start_us,
+    MAX(event_timestamp)                                              AS session_end_us,
+    TIMESTAMP_DIFF(
+      TIMESTAMP_MICROS(MAX(event_timestamp)),
+      TIMESTAMP_MICROS(MIN(event_timestamp)),
+      SECOND
+    )                                                                 AS session_duration_sec,
+    COUNT(*)                                                          AS total_events,
+    COUNTIF(event_name IN ('click', 'user_engagement'))               AS click_events,
+    COUNTIF(event_name = 'scroll')                                    AS scroll_events,
+    MAX(COALESCE(
+      (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'percent_scrolled'),
+      0
+    ))                                                                AS max_scroll_pct,
+    ANY_VALUE(CONCAT(
+      COALESCE(traffic_source.source, '(direct)'), ' / ',
+      COALESCE(traffic_source.medium, '(none)')
+    ))                                                                AS source_medium,
+    ANY_VALUE(COALESCE(geo.country, 'Unknown'))                       AS geo_country,
+    ANY_VALUE(device.category)                                        AS device_category,
+    ANY_VALUE(COALESCE(
+      (SELECT value.string_value FROM UNNEST(event_params) WHERE key = 'page_location'),
+      '/'
+    ))                                                                AS landing_page
+  FROM `{dataset}.events_*`
+  WHERE _TABLE_SUFFIX BETWEEN '{date_start}' AND '{date_end}'
+    AND event_name IN (
+      'page_view', 'session_start', 'scroll', 'click',
+      'user_engagement', 'purchase', 'add_to_cart', 'view_item'
+    )
+  GROUP BY 1, 2
+)
+SELECT
+  client_id,
+  FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%S',
+    TIMESTAMP_MICROS(session_start_us))                               AS event_timestamp,
+  GREATEST(session_duration_sec, 0)                                   AS session_duration_sec,
+  total_events,
+  click_events,
+  scroll_events,
+  COALESCE(max_scroll_pct, 0)                                         AS page_scroll_depth_pct,
+  ROUND(SAFE_DIVIDE(total_events, GREATEST(session_duration_sec, 1)), 2)
+                                                                      AS event_velocity_per_sec,
+  source_medium,
+  geo_country,
+  COALESCE(device_category, 'desktop')                                AS device_category,
+  landing_page
+FROM sessions
+WHERE session_id IS NOT NULL
+ORDER BY RAND()
+LIMIT {n_sessions}
+"""
+
+
+def fetch_ga4_public_data(n_sessions: int = N_SESSIONS) -> pd.DataFrame:
+    """
+    Queries the GA4 Obfuscated Sample Ecommerce public dataset on BigQuery.
+    Returns one row per session with real behavioral features.
+
+    Requires:
+      - GCP project with billing enabled (first 1TB/month free)
+      - Application Default Credentials: gcloud auth application-default login
+      - pip install google-cloud-bigquery db-dtypes
+    """
+    try:
+        from google.cloud import bigquery   # type: ignore
+    except ImportError:
+        print("\n[ERROR] google-cloud-bigquery not installed.")
+        print("        Run: pip install google-cloud-bigquery db-dtypes")
+        print("        Then re-run this script, or use --mock for offline mode.\n")
+        sys.exit(1)
+
+    if GCP_PROJECT_ID == "YOUR_GCP_PROJECT_ID":
+        print("\n[ERROR] GCP_PROJECT_ID is not set.")
+        print("        Set it at the top of this script, or:")
+        print("        export GCP_PROJECT_ID=my-gcp-project")
+        print("        Or run in offline mode: python scripts/bq_vertex_pipeline.py --mock\n")
+        sys.exit(1)
+
+    print(f"\n[Step 1] Querying GA4 public dataset on BigQuery...")
+    print(f"         Dataset  : {BQ_PUBLIC_DATASET}.events_*")
+    print(f"         Dates    : {BQ_DATE_START} → {BQ_DATE_END}  (Nov 2020 – Jan 2021)")
+    print(f"         Sessions : {n_sessions:,}")
+    print(f"         Project  : {GCP_PROJECT_ID}  (billing project for query costs)")
+    print(f"         Est. cost: < 0.001 TB → well within 1TB free tier\n")
+
+    client = bigquery.Client(project=GCP_PROJECT_ID)
+
+    query = GA4_SESSION_QUERY.format(
+        dataset    = BQ_PUBLIC_DATASET,
+        date_start = BQ_DATE_START,
+        date_end   = BQ_DATE_END,
+        n_sessions = n_sessions,
+    )
+
+    print("         Running query...")
+    df = client.query(query).to_dataframe()
+
+    if df.empty:
+        print("[ERROR] Query returned 0 rows. Check dataset access and date range.")
+        sys.exit(1)
+
+    print(f"         ✓ Fetched {len(df):,} real GA4 sessions from BigQuery")
+    print(f"           Columns: {list(df.columns)}")
+
+    # Normalise types
+    df["session_duration_sec"]    = df["session_duration_sec"].fillna(0).astype(int)
+    df["click_events"]            = df["click_events"].fillna(0).astype(int)
+    df["scroll_events"]           = df["scroll_events"].fillna(0).astype(int)
+    df["page_scroll_depth_pct"]   = df["page_scroll_depth_pct"].fillna(0).astype(int)
+    df["event_velocity_per_sec"]  = df["event_velocity_per_sec"].fillna(1.0).astype(float)
+
+    # Show source distribution
+    top_sources = df["source_medium"].value_counts().head(5)
+    print(f"\n         Top traffic sources in real data:")
+    for src, cnt in top_sources.items():
+        print(f"           {src:<35} {cnt:>5} sessions")
+
+    return df
+
+
+# ══════════════════════════════════════════════════════════════
+# STEP 1B: SYNTHETIC DATA GENERATOR (--mock / offline mode)
+#
+# Used when no GCP credentials are available.
+# Generates 1,000 rows with distributions across three traffic
+# types to demonstrate bot detection. Kept as fallback.
 # ══════════════════════════════════════════════════════════════
 
 def _random_ip(is_bot: bool) -> str:
-    """[MOCK] Generate realistic IPs. Bots use known crawler ranges."""
     if is_bot:
-        # Known bot / datacenter IP prefixes (Googlebot, GPTBot, ad fraud farms)
         prefixes = ["66.249", "40.77", "157.55", "207.46", "54.173", "34.86"]
         return f"{random.choice(prefixes)}.{random.randint(1,254)}.{random.randint(1,254)}"
     return ".".join(str(random.randint(1, 254)) for _ in range(4))
 
 
-def _random_user_agent(traffic_type: str) -> str:
-    """[MOCK] Assign user agents matching each traffic profile."""
-    human_uas = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Safari/537.36",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Firefox/121.0",
-        "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
-    ]
-    scraper_uas = [
-        "GPTBot/1.0 (+https://openai.com/gptbot)",
-        "ClaudeBot/1.0 (+https://www.anthropic.com/claude)",
-        "python-requests/2.31.0",
-        "curl/8.4.0",
-        "Wget/1.21.3",
-        "Go-http-client/2.0",
-    ]
-    fraud_uas = [
-        "AdsBot-Google (+http://www.google.com/adsbot.html)",
-        "Mozilla/5.0 (compatible; BLEXBot/1.0)",
-        "Mozilla/5.0 (compatible; SemrushBot/7~bl)",
-        "Googlebot/2.1 (+http://www.google.com/bot.html)",
-    ]
-    if traffic_type == "Human":      return random.choice(human_uas)
-    if traffic_type == "LLM_Scraper": return random.choice(scraper_uas)
-    return random.choice(fraud_uas)
-
-
-def generate_mock_ga4_data(n: int = N_ROWS) -> pd.DataFrame:
+def generate_mock_ga4_data(n: int = N_SESSIONS) -> pd.DataFrame:
     """
-    [MOCK] Generates n synthetic GA4 raw event rows with realistic
-    distributions across three traffic types:
-      55% Human · 25% LLM_Scraper · 20% Ad_Fraud
-
-    Each row contains the features used by vertex_ai_clustering():
-      edge_score, event_velocity_per_sec, session_duration_sec,
-      mouse_move_events, page_scroll_depth_pct
+    [MOCK / OFFLINE] Generates n synthetic GA4 session rows.
+    Used when --mock flag is passed or no GCP credentials are available.
+    Traffic split: 55% Human · 25% LLM_Scraper · 20% Ad_Fraud
     """
-    print(f"\n[Step 1] Generating {n:,} mock GA4 raw event rows...")
+    print(f"\n[Step 1] Generating {n:,} synthetic GA4 sessions (offline mock mode)...")
+    print("         [NOTE] No BigQuery connection — all data is fabricated.")
 
     traffic_types = np.random.choice(
-        ["Human", "LLM_Scraper", "Ad_Fraud"],
-        size=n,
-        p=[0.55, 0.25, 0.20]
+        ["Human", "LLM_Scraper", "Ad_Fraud"], size=n, p=[0.55, 0.25, 0.20]
     )
 
     base_time = datetime(2025, 1, 6, 8, 0, 0)
-    sources   = ["google / cpc", "meta / paid_social", "direct / (none)", "bing / cpc", "programmatic / display"]
+    sources   = ["google / cpc", "meta / paid_social", "direct / (none)",
+                 "bing / cpc", "programmatic / display"]
     countries = ["US", "GB", "CA", "AU", "DE", "BR", "IN", "FR", "NL", "SG"]
     pages     = ["/", "/pricing", "/about", "/blog/ai-detection", "/contact", "/demo"]
+    devices   = ["desktop", "mobile", "tablet"]
 
     rows = []
     elapsed = 0
 
-    for i, t_type in enumerate(traffic_types):
-        is_human  = (t_type == "Human")
-        is_fraud  = (t_type == "Ad_Fraud")
+    for t_type in traffic_types:
+        is_human   = (t_type == "Human")
         is_scraper = (t_type == "LLM_Scraper")
 
-        # ── Edge Score (primary detection signal from Cloud Armor) ──
-        # [MOCK] In production this comes from reCAPTCHA Enterprise / Cloud Armor
-        # and is attached to the hit via a Server-Side GTM custom variable.
-        if is_human:
-            edge_score = round(float(np.random.beta(8, 2)), 3)    # 0.65–1.0 range
-        elif is_scraper:
-            edge_score = round(float(np.random.beta(2, 6)), 3)    # 0.10–0.45 range
-        else:
-            edge_score = round(float(np.random.beta(1, 9)), 3)    # 0.02–0.20 range
-
-        # ── Event Velocity (hits/sec sent to GA4 collection endpoint) ──
-        event_velocity = (
-            random.randint(1, 4)   if is_human  else
-            random.randint(10, 35) if is_scraper else
-            random.randint(30, 80)                    # Ad fraud: very high
-        )
-
-        # ── Session Duration ──
         session_duration = (
             random.randint(45, 600) if is_human  else
             random.randint(0, 6)    if is_scraper else
             random.randint(0, 3)
         )
-
-        # ── Behavioral Signals ──
-        mouse_moves     = random.randint(20, 250) if is_human else 0
-        scroll_depth    = random.randint(35, 95)  if is_human else random.randint(0, 8)
-        click_events    = random.randint(1, 12)   if is_human else 0
+        click_events   = random.randint(1, 12) if is_human else 0
+        scroll_events  = random.randint(2, 15) if is_human else 0
+        scroll_depth   = random.randint(35, 95) if is_human else random.randint(0, 8)
+        total_events   = (
+            random.randint(4, 20)  if is_human  else
+            random.randint(1, 3)   if is_scraper else
+            random.randint(1, 2)
+        )
+        velocity = round(total_events / max(session_duration, 1), 2)
 
         elapsed += random.uniform(0.3, 6.0)
-
         rows.append({
-            "event_timestamp"        : (base_time + timedelta(seconds=elapsed)).isoformat(),
             "client_id"              : ''.join(random.choices(string.ascii_uppercase + string.digits, k=12)),
-            "ip_address"             : _random_ip(not is_human),
-            "user_agent"             : _random_user_agent(t_type),
+            "event_timestamp"        : (base_time + timedelta(seconds=elapsed)).isoformat(),
+            "session_duration_sec"   : session_duration,
+            "total_events"           : total_events,
+            "click_events"           : click_events,
+            "scroll_events"          : scroll_events,
+            "page_scroll_depth_pct"  : scroll_depth,
+            "event_velocity_per_sec" : velocity,
             "source_medium"          : random.choice(sources),
             "geo_country"            : random.choice(countries),
+            "device_category"        : random.choice(devices),
             "landing_page"           : random.choice(pages),
-            "edge_score"             : edge_score,
-            "event_velocity_per_sec" : event_velocity,
-            "session_duration_sec"   : session_duration,
-            "mouse_move_events"      : mouse_moves,
-            "page_scroll_depth_pct"  : scroll_depth,
-            "click_events"           : click_events,
-            "raw_traffic_label"      : t_type,   # Ground truth for validation only
+            "raw_traffic_label"      : t_type,   # ground truth for validation
         })
 
     df = pd.DataFrame(rows)
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    df.to_csv(RAW_CSV, index=False)
-
     dist = dict(pd.Series(traffic_types).value_counts())
     print(f"         Distribution : {dist}")
-    print(f"         Saved to     : {RAW_CSV}")
     return df
 
 
 # ══════════════════════════════════════════════════════════════
-# STEP 2: VERTEX AI CLUSTERING
+# STEP 2: ENRICH WITH SIMULATED EDGE SIGNALS
 #
-# [MOCK]       Uses interpretable rule-based logic that mirrors
-#              what a trained Isolation Forest or K-Means model
-#              would produce on these features.
+# Two features cannot be derived from the GA4 BigQuery schema:
 #
-# [PRODUCTION] Replace the classify_row() logic with a call to
-#              your trained Vertex AI endpoint:
+#   edge_score        — set by Cloud Armor / reCAPTCHA Enterprise
+#                       at the network edge, before hits reach GA4.
+#                       Simulated here from device + source signals.
+#
+#   mouse_move_events — client-side JS behavioral signal, not a
+#                       standard GA4 event. Simulated from session
+#                       duration and click count.
+#
+# Both are clearly marked SIMULATED in the exported CSV.
+# In production they would come from Server-Side GTM custom variables.
+# ══════════════════════════════════════════════════════════════
+
+def enrich_with_edge_signals(df: pd.DataFrame, is_real_data: bool = True) -> pd.DataFrame:
+    """
+    Adds edge_score and mouse_move_events to real BigQuery rows.
+    For mock data, these were already set to realistic values by the generator.
+    Labels both columns as SIMULATED so downstream consumers know their origin.
+    """
+    if not is_real_data:
+        # Mock data: derive edge scores from raw_traffic_label ground truth
+        def _edge_from_label(row):
+            if row["raw_traffic_label"] == "Human":
+                return round(float(np.random.beta(8, 2)), 3)
+            elif row["raw_traffic_label"] == "LLM_Scraper":
+                return round(float(np.random.beta(2, 6)), 3)
+            else:
+                return round(float(np.random.beta(1, 9)), 3)
+        df["edge_score"]        = df.apply(_edge_from_label, axis=1)
+        df["mouse_move_events"] = df.apply(
+            lambda r: random.randint(20, 250) if r["raw_traffic_label"] == "Human" else 0, axis=1
+        )
+        return df
+
+    print(f"\n[Step 2] Enriching {len(df):,} real GA4 sessions with simulated edge signals...")
+    print("         edge_score        — [SIMULATED] Cloud Armor / reCAPTCHA not in GA4 schema")
+    print("         mouse_move_events — [SIMULATED] client-side JS signal not in GA4 schema")
+
+    edge_scores      = []
+    mouse_move_list  = []
+
+    for _, row in df.iterrows():
+        duration = row["session_duration_sec"]
+        velocity = row["event_velocity_per_sec"]
+        device   = str(row.get("device_category", "desktop")).lower()
+        source   = str(row.get("source_medium", "")).lower()
+
+        # ── Simulate edge_score from available session signals ────────
+        # Real humans from search / direct on desktop/mobile → high scores.
+        # High-velocity, zero-duration sessions → low scores (suspicious).
+        if duration >= 30 and velocity <= 5 and row["click_events"] > 0:
+            # Looks like a genuine engaged session
+            score = round(float(np.random.beta(8, 2)), 3)   # 0.65–0.98 range
+        elif duration <= 2 or velocity > 15:
+            # Very short or very fast — bot signal
+            if "programmatic" in source or "display" in source:
+                score = round(float(np.random.beta(1, 8)), 3)  # 0.02–0.25
+            else:
+                score = round(float(np.random.beta(2, 6)), 3)  # 0.10–0.45
+        else:
+            # Ambiguous — mid-range score
+            score = round(float(np.random.beta(5, 4)), 3)      # 0.35–0.75
+
+        # ── Simulate mouse_move_events from engagement proxies ────────
+        # Real GA4 has scroll % and click events — use these as proxies.
+        if row["click_events"] > 0 or row["scroll_events"] > 0:
+            # Engaged session: scale mouse moves with duration
+            mouse = random.randint(
+                max(5, int(duration * 0.3)),
+                min(300, int(duration * 0.8))
+            )
+        else:
+            mouse = 0   # No engagement signals → likely no mouse movement
+
+        edge_scores.append(score)
+        mouse_move_list.append(mouse)
+
+    df = df.copy()
+    df["edge_score"]        = edge_scores
+    df["mouse_move_events"] = mouse_move_list
+
+    # Add provenance flag so downstream knows which signals are real vs simulated
+    df["edge_score_source"]        = "SIMULATED (Cloud Armor not in GA4 schema)"
+    df["mouse_move_events_source"] = "SIMULATED (client-side signal not in GA4 schema)"
+
+    print(f"         ✓ Edge score range   : {df['edge_score'].min():.3f} – {df['edge_score'].max():.3f}")
+    print(f"         ✓ Mean edge score    : {df['edge_score'].mean():.3f}  (real data → mostly high)")
+
+    return df
+
+
+# ══════════════════════════════════════════════════════════════
+# STEP 3: VERTEX AI CLUSTERING
+#
+# [MOCK]       Rule-based classifier that mirrors what a trained
+#              Isolation Forest / K-Means model learns from the
+#              four primary features.
+#
+# [PRODUCTION] Replace classify_row() with a Vertex AI call:
 #
 #   from google.cloud import aiplatform
 #   aiplatform.init(project=GCP_PROJECT_ID, location=VERTEX_AI_REGION)
@@ -216,18 +418,15 @@ def generate_mock_ga4_data(n: int = N_ROWS) -> pd.DataFrame:
 #   df["vertex_ai_classification"] = [p["label"] for p in response.predictions]
 # ══════════════════════════════════════════════════════════════
 
-def vertex_ai_clustering(df: pd.DataFrame) -> pd.DataFrame:
+def vertex_ai_clustering(df: pd.DataFrame, has_ground_truth: bool = False) -> pd.DataFrame:
     """
-    Classifies each GA4 hit into ['Human', 'LLM_Scraper', 'Ad_Fraud']
-    using a rule hierarchy that mirrors a trained Vertex AI model.
+    Classifies each session as Human / LLM_Scraper / Ad_Fraud using a
+    rule hierarchy that mirrors what a trained Vertex AI model learns.
 
-    Feature priority:
-      1. edge_score              — strongest single signal
-      2. event_velocity_per_sec  — bots fire events much faster than humans
-      3. session_duration_sec    — humans stay; bots leave instantly
-      4. mouse_move_events       — humans move mice; bots do not
+    For real BigQuery data: no ground-truth labels exist, so accuracy
+    metrics are skipped. The distribution itself is the output.
     """
-    print(f"\n[Step 2] Running Vertex AI clustering simulation on {len(df):,} rows...")
+    print(f"\n[Step 3] Running Vertex AI classification on {len(df):,} sessions...")
     print("         [PRODUCTION] This would call your trained Vertex AI endpoint.")
 
     def classify_row(row) -> str:
@@ -235,25 +434,20 @@ def vertex_ai_clustering(df: pd.DataFrame) -> pd.DataFrame:
         velocity = row["event_velocity_per_sec"]
         duration = row["session_duration_sec"]
         mouse    = row["mouse_move_events"]
-        scroll   = row["page_scroll_depth_pct"]
 
-        # ── Rule 1: Ad Fraud ──────────────────────────────────────────
-        # Very low edge score + extreme event velocity = click fraud bot
+        # Rule 1: Ad Fraud — very low score + extreme event velocity
         if score < 0.20 and velocity > 20:
             return "Ad_Fraud"
 
-        # ── Rule 2: LLM Scraper ───────────────────────────────────────
-        # Low-medium score + high velocity + near-zero behavioral signals
+        # Rule 2: LLM Scraper — low score + high velocity + no behavioral signals
         if score < 0.48 and velocity > 8 and duration < 10 and mouse == 0:
             return "LLM_Scraper"
 
-        # ── Rule 3: Confirmed Human ───────────────────────────────────
-        # High edge score + normal velocity + meaningful engagement
+        # Rule 3: Confirmed Human — high score + normal velocity + engagement
         if score >= 0.55 and velocity <= 5 and duration >= 30 and mouse > 0:
             return "Human"
 
-        # ── Rule 4: Edge-score tiebreaker ────────────────────────────
-        # Catches ambiguous sessions (suspicious range 0.4–0.6)
+        # Rule 4: Edge-score tiebreaker for ambiguous sessions
         if score >= 0.62:
             return "Human"
         elif score >= 0.38:
@@ -263,95 +457,86 @@ def vertex_ai_clustering(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.copy()
     df["vertex_ai_classification"] = df.apply(classify_row, axis=1)
-
-    # ── Validation vs ground truth ───────────────────────────────────
-    accuracy = (df["vertex_ai_classification"] == df["raw_traffic_label"]).mean()
     pred_dist = dict(df["vertex_ai_classification"].value_counts())
+    print(f"         Classification result : {pred_dist}")
 
-    print(f"         Predicted distribution : {pred_dist}")
-    print(f"         Accuracy vs labels     : {accuracy:.1%}")
-
-    # Per-class accuracy breakdown
-    for cls in ["Human", "LLM_Scraper", "Ad_Fraud"]:
-        subset = df[df["raw_traffic_label"] == cls]
-        cls_acc = (subset["vertex_ai_classification"] == cls).mean()
-        print(f"           {cls:<15} precision : {cls_acc:.1%}  (n={len(subset)})")
+    if has_ground_truth and "raw_traffic_label" in df.columns:
+        accuracy = (df["vertex_ai_classification"] == df["raw_traffic_label"]).mean()
+        print(f"         Accuracy vs labels   : {accuracy:.1%}")
+        for cls in ["Human", "LLM_Scraper", "Ad_Fraud"]:
+            subset  = df[df["raw_traffic_label"] == cls]
+            cls_acc = (subset["vertex_ai_classification"] == cls).mean()
+            print(f"           {cls:<15} precision : {cls_acc:.1%}  (n={len(subset)})")
 
     return df
 
 
 # ══════════════════════════════════════════════════════════════
-# STEP 3: EXPORT CLEANED DATA
+# STEP 4: EXPORT CLEANED DATA
 #
-# [MOCK]       Writes filtered rows to a local CSV.
-# [PRODUCTION] Replace df.to_csv() with BigQuery write:
+# [MOCK]       Writes human-only rows to local CSV.
+# [PRODUCTION] Write to BigQuery then trigger downstream:
 #
 #   df_cleaned.to_gbq(
-#     destination_table=f"{GCP_PROJECT_ID}.{BIGQUERY_DATASET}.cleaned_events",
-#     project_id=GCP_PROJECT_ID,
-#     if_exists="replace"
+#     destination_table=f"{GCP_PROJECT_ID}.{PROD_BQ_DATASET}.cleaned_events",
+#     project_id=GCP_PROJECT_ID, if_exists="replace"
 #   )
-#
-#   Then trigger:
-#   - Google Ads offline conversion import (for VBB)
-#   - Meridian MMM pipeline via Vertex AI Pipelines
+#   → Trigger Google Ads offline conversion import (VBB)
+#   → Trigger Meridian MMM Vertex AI Pipeline
 # ══════════════════════════════════════════════════════════════
 
-# Conversion values by source — [MOCK] In production, pull from CRM / Salesforce
 CONV_VALUES = {
     "google / cpc"           : 150.00,
     "meta / paid_social"     : 120.00,
     "bing / cpc"             :  90.00,
     "direct / (none)"        : 200.00,
     "programmatic / display" :  60.00,
+    "(direct) / (none)"      : 200.00,   # GA4 public dataset format
+    "google / organic"       : 180.00,
 }
 
 def export_cleaned_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Filters to Human-classified rows only, assigns conversion_value_usd
-    for Google Ads VBB upload, and exports to CSV.
-
-    The resulting CSV represents the "clean signal" payload sent to:
-      - Google Ads Enhanced Conversions (Value-Based Bidding)
-      - Meridian MMM for incrementality calibration
-      - Looker Studio for executive reporting
+    Filters to Human-classified rows, assigns conversion_value_usd,
+    and exports the cleaned payload for VBB upload and Meridian MMM.
     """
-    print(f"\n[Step 3] Exporting cleaned data payload...")
-    print("         [PRODUCTION] This would write to BigQuery → trigger Meridian pipeline.")
+    print(f"\n[Step 4] Exporting cleaned human-only data payload...")
+    print("         [PRODUCTION] Would write to BigQuery → trigger Meridian pipeline.")
 
     df_human = df[df["vertex_ai_classification"] == "Human"].copy()
 
-    # Assign conversion values for VBB
     df_human["conversion_value_usd"] = (
         df_human["source_medium"].map(CONV_VALUES).fillna(100.00)
     )
 
-    # Columns exported (matches GA4 Enhanced Conversions schema)
     export_cols = [
-        "event_timestamp", "client_id", "source_medium",
-        "geo_country", "landing_page",
+        "client_id", "event_timestamp", "source_medium",
+        "geo_country", "device_category", "landing_page",
         "edge_score", "session_duration_sec",
-        "page_scroll_depth_pct", "mouse_move_events",
+        "event_velocity_per_sec", "page_scroll_depth_pct",
+        "click_events", "scroll_events", "mouse_move_events",
         "vertex_ai_classification", "conversion_value_usd",
     ]
-    df_export = df_human[export_cols].reset_index(drop=True)
+
+    # Keep only columns that exist (real data may not have all mock columns)
+    export_cols = [c for c in export_cols if c in df_human.columns]
+    df_export   = df_human[export_cols].reset_index(drop=True)
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     df_export.to_csv(CLEANED_CSV, index=False)
 
-    # ── Pipeline Summary ─────────────────────────────────────────────
-    total_raw      = len(df)
-    total_cleaned  = len(df_export)
-    bots_removed   = total_raw - total_cleaned
-    total_value    = df_export["conversion_value_usd"].sum()
-    avg_value      = df_export["conversion_value_usd"].mean()
-    clean_pct      = total_cleaned / total_raw
-    bot_pct        = bots_removed  / total_raw
+    total_raw     = len(df)
+    total_cleaned = len(df_export)
+    bots_removed  = total_raw - total_cleaned
+    total_value   = df_export["conversion_value_usd"].sum()
+    avg_value     = df_export["conversion_value_usd"].mean()
 
     print(f"\n{'═'*58}")
     print(f"  Pipeline Summary — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'═'*58}")
-    print(f"  Raw GA4 hits             : {total_raw:>6,}")
-    print(f"  Human (cleaned signal)   : {total_cleaned:>6,}  ({clean_pct:.1%})")
-    print(f"  Bots / Scrapers removed  : {bots_removed:>6,}  ({bot_pct:.1%})")
+    print(f"  Raw GA4 sessions         : {total_raw:>6,}")
+    print(f"  Human (cleaned signal)   : {total_cleaned:>6,}  ({total_cleaned/total_raw:.1%})")
+    print(f"  Bots / Scrapers removed  : {bots_removed:>6,}  ({bots_removed/total_raw:.1%})")
     print(f"  {'─'*48}")
     print(f"  Total Conversion Value   : ${total_value:>10,.2f}")
     print(f"  Avg Conv Value / Session : ${avg_value:>10.2f}")
@@ -360,30 +545,74 @@ def export_cleaned_data(df: pd.DataFrame) -> pd.DataFrame:
     print(f"{'═'*58}")
     print(f"\n  Downstream targets:")
     print(f"    → Google Ads VBB  : upload {total_cleaned:,} conversions at avg ${avg_value:.2f}")
-    print(f"    → Meridian MMM    : {bots_removed:,} bot events removed from attribution model")
-    print(f"    → Looker Studio   : refreshed dataset available at BigQuery destination")
+    print(f"    → Meridian MMM    : {bots_removed:,} bot sessions removed from attribution model")
+    print(f"    → Looker Studio   : refreshed dataset ready for executive reporting")
+
+    # Source breakdown
+    if total_cleaned > 0:
+        print(f"\n  Conversion value by source:")
+        src_summary = df_export.groupby("source_medium")["conversion_value_usd"].agg(["count", "sum"])
+        for src, row in src_summary.iterrows():
+            print(f"    {src:<35} {int(row['count']):>5} sessions  ${row['sum']:>10,.2f}")
 
     return df_export
 
 
 # ══════════════════════════════════════════════════════════════
-# MAIN PIPELINE RUNNER
+# MAIN
 # ══════════════════════════════════════════════════════════════
 
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser(
+        description="GA4 Enterprise Agent Architecture — BigQuery & Vertex AI Pipeline"
+    )
+    parser.add_argument(
+        "--mock", action="store_true",
+        help="Run in offline mock mode (no GCP credentials required)"
+    )
+    parser.add_argument(
+        "--sessions", type=int, default=N_SESSIONS,
+        help=f"Number of sessions to fetch/generate (default: {N_SESSIONS})"
+    )
+    args = parser.parse_args()
+
+    use_mock = args.mock or os.getenv("PIPELINE_MODE", "").lower() == "mock"
+
     print("═" * 58)
     print("  GA4 Enterprise Agent Architecture")
-    print("  BigQuery & Vertex AI Pipeline Simulator")
-    print(f"  GCP Project: {GCP_PROJECT_ID}")
+    print("  BigQuery & Vertex AI Pipeline")
+    mode_str = "MOCK (offline)" if use_mock else "BIGQUERY (real GA4 public dataset)"
+    print(f"  Mode    : {mode_str}")
+    if not use_mock:
+        print(f"  Project : {GCP_PROJECT_ID}")
+        print(f"  Dataset : {BQ_PUBLIC_DATASET}")
     print("═" * 58)
 
-    # Step 1: Generate raw mock data (replace with BigQuery in production)
-    df_raw = generate_mock_ga4_data(N_ROWS)
+    if use_mock:
+        # ── Offline / mock mode ──────────────────────────────────────
+        df_raw = generate_mock_ga4_data(args.sessions)
+        df_raw = enrich_with_edge_signals(df_raw, is_real_data=False)
+        df_raw.to_csv(RAW_CSV, index=False)
+        print(f"         Saved to : {RAW_CSV}")
 
-    # Step 2: Vertex AI clustering (replace with endpoint.predict() in production)
-    df_classified = vertex_ai_clustering(df_raw)
+        df_classified = vertex_ai_clustering(df_raw, has_ground_truth=True)
+        df_cleaned    = export_cleaned_data(df_classified)
 
-    # Step 3: Export cleaned signal payload
-    df_cleaned = export_cleaned_data(df_classified)
+    else:
+        # ── BigQuery mode — real GA4 public data ────────────────────
+        df_raw = fetch_ga4_public_data(args.sessions)
+        df_raw = enrich_with_edge_signals(df_raw, is_real_data=True)
+
+        # No ground-truth labels in real data — skip accuracy metrics
+        df_raw["raw_traffic_label"] = "UNKNOWN (real data)"
+        df_raw.to_csv(RAW_CSV, index=False)
+        print(f"         Saved raw sessions to : {RAW_CSV}")
+
+        df_classified = vertex_ai_clustering(df_raw, has_ground_truth=False)
+        df_cleaned    = export_cleaned_data(df_classified)
 
     print("\n  [DONE] Pipeline complete.\n")
+
+
+if __name__ == "__main__":
+    main()
