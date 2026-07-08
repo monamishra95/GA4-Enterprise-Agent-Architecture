@@ -1,4 +1,4 @@
-# GA4 Enterprise Agent Architecture — Measuring How Agents & Bots Engage With Your Business
+# GA4 Measurement Intelligence — Measuring How Agents & Bots Engage With Your Business
 
 **Product Architecture Brief**
 
