@@ -57,7 +57,7 @@
         </div>
         <p class="text-slate-500 text-xs ml-12">
           Server-Side Edge Detection &nbsp;·&nbsp; BigQuery / Vertex AI &nbsp;·&nbsp;
-          Value-Based Bidding &nbsp;·&nbsp; Meridian MMM
+          Value-Based Bidding &nbsp;·&nbsp; Channel Attribution
         </p>
       </div>
 
@@ -246,14 +246,14 @@
   </section>
 
   <!-- ═══════════════════════════════════════════════════════
-       SECTION 3: MERIDIAN MMM & GeoX CALIBRATION
+       SECTION 3: CHANNEL ATTRIBUTION — BOT INFLATION BY CHANNEL
   ═══════════════════════════════════════════════════════ -->
   <section class="card p-6 mb-6 fade-up" style="animation-delay:.3s">
 
     <div class="flex flex-wrap items-start justify-between gap-4 mb-5">
       <div>
         <h2 class="text-sm font-semibold text-white flex items-center gap-2">
-          <span style="color:#f59e0b;">◈</span> Meridian MMM — Channel Incrementality Calibration
+          <span style="color:#f59e0b;">◈</span> Channel Attribution — Bot Inflation by Channel
         </h2>
         <p class="text-slate-500 text-xs mt-1">
           Bot-contaminated signals overstate channel lift — calibration reveals true media performance
@@ -278,16 +278,16 @@
          style="background:rgba(99,102,241,.07); border:1px solid rgba(99,102,241,.2);">
       <strong style="color:#818cf8;">Raw View:</strong>
       <span class="text-slate-400">
-        Meta Ads lift is overstated — LLM scrapers and ad fraud bots are triggering
-        conversion pixels, inflating measured ROAS. Toggle to Calibrated to see Meridian's
-        human-only incrementality estimates.
+        Channel lift is overstated — LLM scrapers and ad fraud bots are triggering
+        conversion pixels, inflating measured ROAS. Toggle to Calibrated to see
+        bot-adjusted attribution using human-only sessions from the cleaned pipeline.
       </span>
     </div>
 
     <!-- Formula Legend: Section 3 -->
     <div class="mb-4 rounded-xl p-4" style="background:#0f172a; border:1px solid #1e293b;">
       <p class="text-[10px] font-bold uppercase tracking-widest mb-3" style="color:#f59e0b;">
-        Meridian Calibration — How the numbers are calculated
+        Channel Attribution — How the numbers are calculated
       </p>
 
       <!-- Formula row -->
@@ -300,8 +300,8 @@
         <div>
           <p class="text-[10px] font-semibold text-slate-500 mb-1">Calibrated Lift</p>
           <code class="text-[11px] text-slate-400">Raw Lift × (1 − bot_contamination_rate)</code>
-          <p class="text-[10px] text-slate-600 mt-1">Meridian receives cleaned BigQuery export (human-only sessions) &nbsp;&middot;&nbsp;
-          <a href="https://github.com/google/meridian" target="_blank" style="color:#f59e0b;">github/google/meridian ↗</a></p>
+          <p class="text-[10px] text-slate-600 mt-1">Pipeline output (numpy attribution model) &nbsp;&middot;&nbsp; Production: feed cleaned export into
+          <a href="https://github.com/google/meridian" target="_blank" style="color:#f59e0b;">Meridian (Bayesian MMM) ↗</a></p>
         </div>
         <div>
           <p class="text-[10px] font-semibold text-slate-500 mb-1">Bot Inflation</p>
@@ -355,8 +355,8 @@
         </table>
       </div>
       <p class="text-[10px] text-slate-600 mt-3">
-        Channel attribution from pipeline output (mock mode) &middot;
-        Install <code>google-meridian</code> for full Bayesian MCMC &middot;
+        Pipeline output — numpy attribution model (raw vs. bot-cleaned sessions) &middot;
+        <a href="https://github.com/google/meridian" target="_blank" style="color:#f59e0b;">Install google-meridian ↗</a> for Bayesian MCMC in production &middot;
         Media spend synthesized from ROAS assumptions [SYNTHETIC]
       </p>
     </div>
@@ -610,10 +610,10 @@
           meridianChart.update();
         }
         const mStatus = summary.meridian.status === 'fitted'
-          ? '<span style="color:#34d399;">PIPELINE DATA (Meridian fitted)</span>'
-          : '<span style="color:#f59e0b;">PIPELINE DATA (attribution model)</span>';
+          ? '<span style="color:#34d399;">PIPELINE DATA (Meridian — Bayesian MMM)</span>'
+          : '<span style="color:#f59e0b;">PIPELINE DATA (numpy attribution fallback — install google-meridian for Bayesian MMM)</span>';
         logToFeed(
-          `MERIDIAN  |  Loaded channel attribution  |  Model: ${summary.meridian.status}  |  ` +
+          `ATTRIBUTION  |  Loaded channel attribution  |  Model: ${summary.meridian.status}  |  ` +
           `Channels: ${CHANNELS.join(', ')}`,
           '#818cf8'
         );
@@ -801,7 +801,7 @@
           calMsg += ` <strong>${topGain.ch}</strong> gains relatively, confirming stronger true incrementality.`;
         }
         insight.innerHTML = `
-          <strong style="color:#34d399;">Calibrated View (Meridian):</strong>
+          <strong style="color:#34d399;">Calibrated View (Bot-Adjusted):</strong>
           <span class="text-slate-400"> ${calMsg}
             <strong style="color:#fbbf24;"> Budget recommendation: shift spend toward channels with lowest bot inflation.</strong>
           </span>`;
@@ -818,9 +818,9 @@
         insight.innerHTML = `
           <strong style="color:#818cf8;">Raw View:</strong>
           <span class="text-slate-400">
-            Channel lift is overstated -- LLM scrapers and ad fraud bots trigger
+            Channel lift is overstated — LLM scrapers and ad fraud bots trigger
             conversion pixels, inflating measured ROAS. Toggle to Calibrated to see
-            Meridian human-only incrementality estimates.
+            bot-adjusted attribution using human-only sessions from the cleaned pipeline.
           </span>`;
         logToFeed('MERIDIAN  ->  RAW view  |  Bot-inflated signals active', '#94a3b8');
       }
